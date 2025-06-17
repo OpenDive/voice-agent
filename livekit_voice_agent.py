@@ -105,25 +105,31 @@ class StateManager:
         # Set up session event handlers
         @self.session.on("user_speech_committed")
         def on_user_speech(msg):
-            """Reset conversation timer when user speaks"""
-            async def reset_timer():
+            """Handle user speech - reset timer and check for conversation ending"""
+            async def handle_user_speech():
+                # Reset conversation timer when user speaks
                 if self.conversation_timer:
                     self.conversation_timer.cancel()
                 self.conversation_timer = asyncio.create_task(self._conversation_timeout())
-            asyncio.create_task(reset_timer())
-            
-        @self.session.on("agent_speech_committed") 
-        def on_agent_speech(msg):
-            """Handle agent speech completion"""
-            async def check_ending():
+                
                 # Check if user said goodbye or similar
                 if hasattr(msg, 'text'):
                     text_lower = msg.text.lower()
-                    if any(word in text_lower for word in ['goodbye', 'thanks', 'that\'s all', 'see you']):
-                        logger.info("Detected conversation ending phrase")
-                        await asyncio.sleep(2)  # Brief pause before ending
+                    if any(word in text_lower for word in ['goodbye', 'thanks', 'that\'s all', 'see you', 'bye']):
+                        logger.info("User indicated conversation ending")
+                        await asyncio.sleep(1)  # Brief pause
                         await self.end_conversation()
-            asyncio.create_task(check_ending())
+            asyncio.create_task(handle_user_speech())
+            
+        @self.session.on("agent_speech_committed") 
+        def on_agent_speech(msg):
+            """Handle agent speech completion - just reset timer to prevent timeout during agent responses"""
+            async def reset_timer_after_agent_speech():
+                # Reset timer after agent speaks to prevent timeout during agent responses
+                if self.conversation_timer:
+                    self.conversation_timer.cancel()
+                self.conversation_timer = asyncio.create_task(self._conversation_timeout())
+            asyncio.create_task(reset_timer_after_agent_speech())
         
         await self.session.start(agent=agent, room=self.ctx.room)
         return self.session
