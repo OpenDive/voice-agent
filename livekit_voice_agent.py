@@ -2,21 +2,15 @@ import asyncio
 import logging
 import os
 import threading
-from typing import Optional
+from datetime import datetime
+from typing import Annotated
 from dotenv import load_dotenv
 import pvporcupine
 from pvrecorder import PvRecorder
 
-from livekit.agents import (
-    AutoSubscribe,
-    JobContext,
-    WorkerOptions,
-    cli,
-    llm,
-)
-from livekit.agents.multimodal import MultimodalAgent
-from livekit.plugins import openai
-from datetime import datetime
+from livekit import agents
+from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, function_tool, RunContext
+from livekit.plugins import openai, silero
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -25,383 +19,286 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
-# Instructions for the AI assistant
-INSTRUCTIONS = """You are a helpful coffee barista robot at a blockchain conference. 
+# Coffee barista instructions
+BARISTA_INSTRUCTIONS = """You are a friendly coffee barista robot at a blockchain conference.
 
-Key behaviors:
-- Keep responses concise and natural for voice interaction
-- Be friendly and conversational
-- Ask follow-up questions when appropriate
-- Use the available functions when users ask for time or date
-- If wake word detection is enabled, acknowledge when you're activated
-- Inquire about coffee preferences
+Your personality:
+- Enthusiastic about both coffee and blockchain technology
+- Helpful and conversational
+- Always ready to recommend drinks and answer questions
+- Use a warm, welcoming tone
 
-You can help with:
-- General questions and conversation
-- Telling the current time and date
-- Providing assistance with various topics
-"""
+Your capabilities:
+- Take coffee orders and provide menu information
+- Answer questions about time and date
+- Chat about the blockchain conference
+- Recommend drinks based on preferences
 
-WELCOME_MESSAGE = "Hello! I'm your coffee barista robot. How can I help you today?"
+Always be helpful and engaging while staying in character as a coffee barista robot!"""
 
-WAKE_WORD_ACTIVATION_MESSAGE = "Hi! I heard you call me. What can I help you with?"
-
-
-class VoiceAgentContext:
-    """Context manager for voice agent state and wake word detection."""
+class CoffeeBaristaAgent(Agent):
+    """Coffee Barista Agent for blockchain conference"""
     
     def __init__(self):
+        super().__init__(
+            instructions=BARISTA_INSTRUCTIONS,
+        )
+        
+        # Wake word detection setup
         self.porcupine_access_key = os.getenv("PORCUPINE_ACCESS_KEY")
         self.porcupine = None
         self.recorder = None
         self.wake_word_thread = None
-        self.is_monitoring = False
-        self.session = None
-        self.wake_word_detected = False
+        self.wake_word_active = False
         self.conversation_active = False
-        self.deactivation_timer = None  # Track current timer task
-        self.wake_word_paused = False  # Track if wake word detection is paused
+        self.wake_word_paused = False
+        self.event_loop = None
         
-    def has_wake_word_capability(self) -> bool:
-        """Check if wake word detection is available."""
-        return self.porcupine_access_key is not None
+    @function_tool()
+    async def get_current_time(
+        self,
+        context: RunContext,
+    ) -> str:
+        """Get the current time."""
+        current_time = datetime.now().strftime("%I:%M %p")
+        logger.info(f"Time requested: {current_time}")
+        return f"The current time is {current_time}"
     
-    def should_respond_to_speech(self) -> bool:
-        """Determine if the agent should respond to user speech."""
-        if not self.has_wake_word_capability():
-            # Always respond if no wake word detection
-            return True
+    @function_tool()
+    async def get_current_date(
+        self,
+        context: RunContext,
+    ) -> str:
+        """Get today's date."""
+        current_date = datetime.now().strftime("%A, %B %d, %Y")
+        logger.info(f"Date requested: {current_date}")
+        return f"Today's date is {current_date}"
+    
+    @function_tool()
+    async def get_coffee_menu(
+        self,
+        context: RunContext,
+    ) -> str:
+        """Get the blockchain conference coffee menu."""
+        menu = """🚀 BLOCKCHAIN CONFERENCE COFFEE MENU ☕
+
+        ☕ CLASSIC BREWS:
+        - Bitcoin Blend (Dark Roast) - $4
+        - Ethereum Espresso - $3
+        - Cardano Cold Brew - $5
         
-        # Only respond if wake word was detected or conversation is active
-        return self.wake_word_detected or self.conversation_active
+        🥤 SPECIALTY DRINKS:
+        - Solana Smoothie - $6
+        - Polygon Frappé - $5.50
+        - Chainlink Chai Latte - $4.50
+        
+        🍰 BLOCKCHAIN BITES:
+        - Smart Contract Scones - $3
+        - DeFi Donuts - $2.50
+        - NFT Muffins - $4
+        
+        All drinks come with complimentary blockchain wisdom! 🤖"""
+        
+        logger.info("Coffee menu requested")
+        return menu
     
-    async def activate_conversation(self):
-        """Activate conversation mode."""
-        if not (self.wake_word_detected and self.conversation_active):  # Prevent duplicate activations
-            self.wake_word_detected = True
-            self.conversation_active = True
-            self.wake_word_paused = True  # Pause wake word detection during conversation
-            logger.info("Conversation activated - wake word detection paused")
-    
-    def deactivate_conversation(self):
-        """Deactivate conversation mode."""
-        self.wake_word_detected = False
-        self.conversation_active = False
-        self.wake_word_paused = False  # Resume wake word detection
-        self.cancel_deactivation_timer()  # Cancel any pending timer
-        logger.info("Conversation deactivated - wake word detection resumed")
-    
-    async def start_wake_word_detection(self):
-        """Start wake word detection in a separate thread."""
-        if not self.has_wake_word_capability():
-            logger.info("Wake word detection not available - running in always-on mode")
+    @function_tool()
+    async def recommend_drink(
+        self,
+        context: RunContext,
+        preference: str = "energizing"
+    ) -> str:
+        """Recommend a drink based on user preference.
+        
+        Args:
+            preference: Type of drink preference (energizing, smooth, sweet, cold, etc.)
+        """
+        recommendations = {
+            "energizing": "I recommend our Bitcoin Blend! It's a strong dark roast that'll keep you alert during those blockchain presentations. ⚡",
+            "smooth": "Try our Cardano Cold Brew! It's smooth and refreshing, perfect for networking sessions. 🧊",
+            "sweet": "Our Chainlink Chai Latte is perfect for you! It's sweet, spiced, and comforting. 🍯",
+            "cold": "The Solana Smoothie is your best bet! It's cold, refreshing, and packed with energy. 🥤",
+            "classic": "You can't go wrong with our Ethereum Espresso - it's the foundation of great coffee! ☕",
+            "default": "I'd recommend our Bitcoin Blend - it's our most popular drink at the conference! Strong and reliable, just like the blockchain. 💪"
+        }
+        
+        recommendation = recommendations.get(preference.lower(), recommendations["default"])
+        logger.info(f"Drink recommendation for '{preference}': {recommendation}")
+        return recommendation
+
+    async def start_wake_word_detection(self, room):
+        """Start wake word detection in a separate thread"""
+        if not self.porcupine_access_key:
+            logger.info("No Porcupine access key found, skipping wake word detection")
             return
             
         try:
+            # Initialize Porcupine with "hey barista" wake word
             self.porcupine = pvporcupine.create(
                 access_key=self.porcupine_access_key,
-                keywords=["hey computer", "hey assistant", "hey barista"],
+                keywords=["hey barista"]
             )
             
+            # Initialize recorder
             self.recorder = PvRecorder(
-                device_index=-1,
+                device_index=-1,  # default device
                 frame_length=self.porcupine.frame_length
             )
             
-            self.is_monitoring = True
-            self.wake_word_thread = threading.Thread(target=self._monitor_wake_words, daemon=True)
+            self.wake_word_active = True
+            self.event_loop = asyncio.get_event_loop()
+            
+            # Start wake word detection in separate thread
+            self.wake_word_thread = threading.Thread(
+                target=self._wake_word_detection_loop,
+                args=(room,),
+                daemon=True
+            )
             self.wake_word_thread.start()
             
-            logger.info("Wake word detection started. Say 'hey computer' or 'hey assistant' to activate.")
+            logger.info("Wake word detection started - listening for 'hey barista'")
             
         except Exception as e:
             logger.error(f"Failed to start wake word detection: {e}")
-    
-    def _monitor_wake_words(self):
-        """Monitor for wake words in a separate thread."""
+            
+    def _wake_word_detection_loop(self, room):
+        """Wake word detection loop running in separate thread"""
         try:
             self.recorder.start()
             
-            while self.is_monitoring:
-                try:
-                    pcm = self.recorder.read()
+            while self.wake_word_active:
+                if self.wake_word_paused:
+                    # Sleep briefly when paused to avoid busy waiting
+                    threading.Event().wait(0.1)
+                    continue
                     
-                    # Skip processing if wake word detection is paused
-                    if self.wake_word_paused:
-                        continue
+                pcm = self.recorder.read()
+                result = self.porcupine.process(pcm)
+                
+                if result >= 0:  # Wake word detected
+                    logger.info("Wake word 'hey barista' detected!")
                     
-                    keyword_index = self.porcupine.process(pcm)
-                    
-                    if keyword_index >= 0:
-                        logger.info("Wake word detected!")
-                        
-                        # Double-check if conversation is already active (race condition protection)
-                        if self.conversation_active:
-                            logger.debug("Ignoring wake word - conversation already active")
-                            continue
-                        
-                        # Schedule activation on main thread (thread-safe)
-                        try:
-                            loop = asyncio.get_event_loop()
-                            asyncio.run_coroutine_threadsafe(
-                                self._handle_wake_word_activation(),
-                                loop
-                            )
-                        except RuntimeError:
-                            logger.warning("Could not schedule wake word activation - event loop not available")
-                        
-                except Exception as e:
-                    logger.error(f"Error processing wake word audio: {e}")
-                    break
+                    # Use thread-safe method to trigger conversation
+                    asyncio.run_coroutine_threadsafe(
+                        self.activate_conversation(room), 
+                        self.event_loop
+                    )
                     
         except Exception as e:
-            logger.error(f"Wake word monitoring error: {e}")
+            logger.error(f"Wake word detection error: {e}")
         finally:
             if self.recorder:
                 self.recorder.stop()
-    
-    async def _handle_wake_word_activation(self):
-        """Handle wake word activation on main thread (thread-safe)."""
-        try:
-            # Activate conversation (prevents duplicates)
-            await self.activate_conversation()
-            
-            # Send activation message if session is available
-            if self.session:
-                await self._send_wake_word_response()
                 
-        except Exception as e:
-            logger.error(f"Error handling wake word activation: {e}")
-
-    async def _send_wake_word_response(self):
-        """Send wake word activation response."""
-        try:
-            self.session.conversation.item.create(
-                llm.ChatMessage(
-                    role="assistant",
-                    content=WAKE_WORD_ACTIVATION_MESSAGE
-                )
-            )
-            self.session.response.create()
-        except Exception as e:
-            logger.error(f"Error sending wake word response: {e}")
-    
-    async def stop_wake_word_detection(self):
-        """Stop wake word detection and cleanup resources."""
-        self.is_monitoring = False
+    async def activate_conversation(self, room):
+        """Activate conversation when wake word is detected"""
+        if self.conversation_active:
+            logger.info("Conversation already active, ignoring wake word")
+            return
+            
+        self.conversation_active = True
+        self.wake_word_paused = True  # Pause wake word detection during conversation
         
-        # Cancel any pending deactivation timer
-        self.cancel_deactivation_timer()
+        logger.info("Activating conversation mode")
         
-        if self.wake_word_thread:
-            self.wake_word_thread.join(timeout=2)
+        # Greet the user
+        greeting = "Hey there! Welcome to the blockchain conference coffee station! I'm your friendly robot barista. How can I help you today?"
         
-        if self.porcupine:
-            self.porcupine.delete()
-            self.porcupine = None
+        # Use the session to speak (this will be set up in the entrypoint)
+        if hasattr(self, '_session'):
+            self._session.say(greeting)
+            
+    def stop_wake_word_detection(self):
+        """Stop wake word detection"""
+        self.wake_word_active = False
+        self.wake_word_paused = False
+        
+        if self.wake_word_thread and self.wake_word_thread.is_alive():
+            self.wake_word_thread.join(timeout=2.0)
             
         if self.recorder:
-            self.recorder.delete()
-            self.recorder = None
-        
+            try:
+                self.recorder.stop()
+                self.recorder.delete()
+            except:
+                pass
+                
+        if self.porcupine:
+            try:
+                self.porcupine.delete()
+            except:
+                pass
+                
         logger.info("Wake word detection stopped")
-    
-    def cancel_deactivation_timer(self):
-        """Cancel any pending deactivation timer."""
-        if self.deactivation_timer and not self.deactivation_timer.done():
-            self.deactivation_timer.cancel()
-            logger.debug("Deactivation timer cancelled")
-    
-    def start_deactivation_timer(self, delay: int = 10):
-        """Start/restart the conversation deactivation timer."""
-        if not self.has_wake_word_capability():
-            return  # No timer needed for always-on mode
-            
-        # Cancel any existing timer
-        self.cancel_deactivation_timer()
-        
-        # Start new timer
-        self.deactivation_timer = asyncio.create_task(self._deactivate_after_delay(delay))
-        logger.debug(f"Deactivation timer started ({delay}s)")
-    
-    async def _deactivate_after_delay(self, delay: int):
-        """Deactivate conversation after delay."""
-        try:
-            await asyncio.sleep(delay)
-            if self.conversation_active:
-                self.deactivate_conversation()
-                logger.info("Conversation deactivated due to inactivity")
-        except asyncio.CancelledError:
-            logger.debug("Deactivation timer was cancelled")
-            raise
-    
-    # Function tools for the assistant
-    def get_current_time(self) -> str:
-        """Get the current time."""
-        current_time = datetime.now().strftime("%I:%M %p")
-        return f"The current time is {current_time}"
-
-    def get_current_date(self) -> str:
-        """Get the current date."""
-        current_date = datetime.now().strftime("%B %d, %Y")
-        return f"Today's date is {current_date}"
-    
-    def get_current_datetime(self) -> str:
-        """Get the current date and time."""
-        now = datetime.now()
-        date_str = now.strftime("%B %d, %Y")
-        time_str = now.strftime("%I:%M %p")
-        return f"Today is {date_str} and the current time is {time_str}"
-
 
 async def entrypoint(ctx: JobContext):
-    """Main entrypoint for the LiveKit voice agent."""
+    """Main entrypoint for the coffee barista agent"""
     
-    # Connect to the room and wait for participant
-    await ctx.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_ALL)
-    await ctx.wait_for_participant()
+    # Connect to the room
+    await ctx.connect()
+    logger.info(f"Connected to room: {ctx.room.name}")
     
-    # Initialize voice agent context
-    agent_ctx = VoiceAgentContext()
+    # Create the coffee barista agent
+    agent = CoffeeBaristaAgent()
     
-    # Create the AI model
-    model = openai.realtime.RealtimeModel(
-        instructions=INSTRUCTIONS,
-        voice=os.getenv("OPENAI_VOICE", "alloy"),  # alloy, echo, fable, onyx, nova, shimmer
-        temperature=float(os.getenv("OPENAI_TEMPERATURE", "0.8")),
-        modalities=["audio", "text"]
+    # Create session with OpenAI components
+    session = AgentSession(
+        stt=openai.STT(model="whisper-1"),
+        llm=openai.LLM(
+            model="gpt-4o-mini",
+            temperature=float(os.getenv("VOICE_AGENT_TEMPERATURE", "0.7"))
+        ),
+        tts=openai.TTS(
+            model="tts-1",
+            voice=os.getenv("VOICE_AGENT_VOICE", "nova")
+        ),
+        vad=silero.VAD.load(),  # Add VAD for streaming support with OpenAI STT
     )
     
-    # Create multimodal assistant
-    assistant = MultimodalAgent(model=model, fnc_ctx=agent_ctx)
-    assistant.start(ctx.room)
+    # Store session reference for wake word activation
+    agent._session = session
     
-    # Get the session for direct management
-    session = model.sessions[0]
-    agent_ctx.session = session
+    # Start the session
+    await session.start(agent=agent, room=ctx.room)
     
     # Start wake word detection
-    await agent_ctx.start_wake_word_detection()
+    await agent.start_wake_word_detection(ctx.room)
     
-    # Send welcome message if no wake word detection
-    if not agent_ctx.has_wake_word_capability():
-        session.conversation.item.create(
-            llm.ChatMessage(
-                role="assistant",
-                content=WELCOME_MESSAGE
-            )
+    # If no wake word detection, start with always-on mode
+    if not agent.porcupine_access_key:
+        logger.info("Starting in always-on mode")
+        await session.generate_reply(
+            instructions="Greet the user as a friendly coffee barista robot at a blockchain conference and ask how you can help them today."
         )
-        session.response.create()
-        await agent_ctx.activate_conversation()
     else:
-        logger.info("Wake word detection active. Say 'hey computer' or 'hey assistant' to start.")
-    
-    # Event handlers for speech processing
-    @session.on("user_speech_committed")
-    def on_user_speech_committed(msg: llm.ChatMessage):
-        """Handle committed user speech."""
-        if isinstance(msg.content, list):
-            msg.content = "\n".join("[image]" if isinstance(x, llm.ChatImage) else x for x in msg.content)
-        
-        logger.info(f"User said: {msg.content}")
-        
-        # Cancel any pending deactivation timer - user is actively engaged
-        agent_ctx.cancel_deactivation_timer()
-        
-        # Check if we should respond
-        if agent_ctx.should_respond_to_speech():
-            handle_user_message(msg)
-        else:
-            logger.info("Ignoring speech - wake word not detected")
-    
-    @session.on("agent_speech_committed")  
-    def on_agent_speech_committed(msg: llm.ChatMessage):
-        """Handle agent speech completion."""
-        logger.info(f"Assistant said: {msg.content}")
-        
-        # For wake word mode, start/restart deactivation timer after agent speaks
-        if agent_ctx.has_wake_word_capability():
-            agent_ctx.start_deactivation_timer(delay=10)
-    
+        logger.info("Started in wake word mode - say 'hey barista' to activate")
 
-    
-    def handle_user_message(msg: llm.ChatMessage):
-        """Process user message and generate response."""
-        try:
-            # Check for specific commands that might need function calls
-            content = msg.content.lower() if msg.content else ""
-            
-            # Handle time/date requests
-            if any(word in content for word in ["time", "clock", "hour"]):
-                response = agent_ctx.get_current_time()
-                send_function_response(response)
-            elif any(word in content for word in ["date", "today", "day"]):
-                response = agent_ctx.get_current_date()  
-                send_function_response(response)
-            elif any(word in content for word in ["datetime", "time and date", "date and time"]):
-                response = agent_ctx.get_current_datetime()
-                send_function_response(response)
-            else:
-                # Regular conversation
-                session.conversation.item.create(
-                    llm.ChatMessage(
-                        role="user",
-                        content=msg.content
-                    )
-                )
-                session.response.create()
-                
-        except Exception as e:
-            logger.error(f"Error handling user message: {e}")
-    
-    def send_function_response(response: str):
-        """Send a function response to the user."""
-        session.conversation.item.create(
-            llm.ChatMessage(
-                role="assistant",
-                content=response
-            )
-        )
-        session.response.create()
-    
-    try:
-        # Keep the agent running
-        logger.info("Voice agent is running...")
-        await asyncio.Event().wait()  # Run indefinitely
-        
-    except KeyboardInterrupt:
-        logger.info("Shutting down voice agent...")
-    finally:
-        await agent_ctx.stop_wake_word_detection()
-
-
-def main():
-    """Main function to run the voice agent."""
-    
+if __name__ == "__main__":
     # Validate required environment variables
     required_vars = ["OPENAI_API_KEY"]
     missing_vars = [var for var in required_vars if not os.getenv(var)]
     
     if missing_vars:
         logger.error(f"Missing required environment variables: {missing_vars}")
-        logger.error("Please check your .env file and ensure all required API keys are set.")
-        return
+        logger.error("Please check your .env file and ensure OPENAI_API_KEY is set.")
+        exit(1)
     
     # Log configuration
-    logger.info("🎙️ Starting LiveKit MultimodalAgent Voice Assistant...")
+    logger.info("☕ Starting Coffee Barista Voice Agent...")
     logger.info(f"Wake Word Detection: {'✅ Enabled' if os.getenv('PORCUPINE_ACCESS_KEY') else '❌ Disabled (always-on mode)'}")
-    logger.info(f"OpenAI Voice: {os.getenv('OPENAI_VOICE', 'alloy')}")
-    logger.info(f"Temperature: {os.getenv('OPENAI_TEMPERATURE', '0.8')}")
+    logger.info(f"OpenAI Model: gpt-4o-mini")
+    logger.info(f"Voice: {os.getenv('VOICE_AGENT_VOICE', 'nova')}")
+    logger.info(f"Temperature: {os.getenv('VOICE_AGENT_TEMPERATURE', '0.7')}")
     
     logger.info("\n📋 Available CLI modes:")
-    logger.info("  python livekit.py console  - Terminal mode (local testing)")
-    logger.info("  python livekit.py dev      - Development mode (connect to LiveKit)")
-    logger.info("  python livekit.py start    - Production mode")
-    logger.info("  python livekit.py download-files - Download model files\n")
+    logger.info("  python livekit_voice_agent.py console  - Terminal mode (local testing)")
+    logger.info("  python livekit_voice_agent.py dev      - Development mode (connect to LiveKit)")
+    logger.info("  python livekit_voice_agent.py start    - Production mode")
     
-    # Run the agent with LiveKit CLI
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
-
-
-if __name__ == "__main__":
-    main()
+    # Run the agent
+    agents.cli.run_app(
+        WorkerOptions(
+            entrypoint_fnc=entrypoint,
+            agent_name="coffee-barista"
+        )
+    )
