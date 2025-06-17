@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import threading
+import json
 from datetime import datetime
 from typing import Annotated
 from enum import Enum
@@ -41,6 +42,8 @@ class StateManager:
         self.user_response_timer = None  # Timer for waiting for user response
         self.ctx = None
         self.agent = agent
+        self.current_emotion = "waiting"  # Track current emotional state
+        self.emotion_history = []  # Log emotional journey
 
     async def transition_to_state(self, new_state: AgentState):
         """Handle state transitions with proper cleanup"""
@@ -81,7 +84,16 @@ class StateManager:
             await asyncio.sleep(MAX_CONVERSATION_TIME)  # 5 minute absolute limit
             if self.session and self.current_state == AgentState.ACTIVE:
                 logger.info("Maximum conversation time reached - ending session")
-                await self.session.say("We've been chatting for a while! Thanks for the conversation. Say 'hey barista' if you need me again.")
+                
+                # Timeout message with sleepy emotion
+                timeout_json = {
+                    "emotion": "sleepy",
+                    "text": "We've been chatting for a while! I'm getting a bit sleepy. Thanks for the conversation. Say 'hey barista' if you need me again."
+                }
+                timeout_msg = json.dumps(timeout_json)
+                emotion, text = self.process_emotional_response(timeout_msg)
+                await self.say_with_emotion(text, emotion)
+                
                 await asyncio.sleep(2)
                 await self.end_conversation()
         except asyncio.CancelledError:
@@ -94,15 +106,28 @@ class StateManager:
             await asyncio.sleep(USER_RESPONSE_TIMEOUT)
             
             if self.session and self.current_state == AgentState.ACTIVE:
-                # Polite prompt
-                await self.session.say("Is there anything else I can help you with?")
+                # Polite prompt with curious emotion
+                prompt_json = {
+                    "emotion": "curious",
+                    "text": "Is there anything else I can help you with?"
+                }
+                prompt_msg = json.dumps(prompt_json)
+                emotion, text = self.process_emotional_response(prompt_msg)
+                await self.say_with_emotion(text, emotion)
                 
                 # Wait a bit more
                 await asyncio.sleep(FINAL_TIMEOUT)
                 
                 if self.session and self.current_state == AgentState.ACTIVE:
-                    # End conversation
-                    await self.session.say("Thanks for chatting! Say 'hey barista' if you need me again.")
+                    # End conversation with friendly emotion
+                    goodbye_json = {
+                        "emotion": "friendly",
+                        "text": "Thanks for chatting! Say 'hey barista' if you need me again."
+                    }
+                    goodbye_msg = json.dumps(goodbye_json)
+                    emotion, text = self.process_emotional_response(goodbye_msg)
+                    await self.say_with_emotion(text, emotion)
+                    
                     await asyncio.sleep(2)
                     await self.end_conversation()
                 
@@ -148,13 +173,25 @@ class StateManager:
             
         @self.session.on("agent_speech_committed") 
         def on_agent_speech(msg):
-            """Handle agent speech completion - start user response timer"""
-            async def start_user_response_timer():
+            """Handle agent speech completion - start user response timer and process emotions"""
+            async def handle_agent_speech():
+                # Process emotional response if available
+                if hasattr(msg, 'text') and msg.text:
+                    # Check if this is a JSON response with emotion
+                    try:
+                        response_data = json.loads(msg.text)
+                        if 'emotion' in response_data:
+                            emotion = response_data['emotion']
+                            logger.info(f"🎭 Agent spoke with emotion: {emotion}")
+                            self.log_animated_eyes(emotion)
+                    except:
+                        pass  # Not JSON, just regular text
+                
                 # Start timer to wait for user response after agent finishes speaking
                 if self.user_response_timer:
                     self.user_response_timer.cancel()
                 self.user_response_timer = asyncio.create_task(self._wait_for_user_response())
-            asyncio.create_task(start_user_response_timer())
+            asyncio.create_task(handle_agent_speech())
         
         await self.session.start(agent=agent, room=self.ctx.room)
         return self.session
@@ -174,8 +211,81 @@ class StateManager:
         await self.destroy_session()
         await self.transition_to_state(AgentState.DORMANT)
 
+    def process_emotional_response(self, llm_response: str) -> tuple[str, str]:
+        """Process LLM response and extract emotion + text"""
+        try:
+            # Try to parse JSON response
+            response_data = json.loads(llm_response)
+            emotion = response_data.get("emotion", "friendly")
+            text = response_data.get("text", "")
+            
+            # Validate emotion is in our supported set
+            valid_emotions = {
+                "excited", "helpful", "friendly", "curious", "empathetic", 
+                "sleepy", "waiting", "confused", "proud", "playful", 
+                "focused", "surprised"
+            }
+            
+            if emotion not in valid_emotions:
+                logger.warning(f"Unknown emotion '{emotion}', defaulting to 'friendly'")
+                emotion = "friendly"
+            
+            # Log emotion transition
+            if emotion != self.current_emotion:
+                logger.info(f"🎭 Emotion transition: {self.current_emotion} → {emotion}")
+                self.log_animated_eyes(emotion)
+                self.current_emotion = emotion
+                
+                # Store in emotion history
+                self.emotion_history.append({
+                    'timestamp': datetime.now(),
+                    'emotion': emotion,
+                    'text_preview': text[:50] + "..." if len(text) > 50 else text
+                })
+            
+            return emotion, text
+            
+        except json.JSONDecodeError:
+            # Fallback: treat entire response as text with neutral emotion
+            logger.warning("Failed to parse JSON response, using fallback")
+            return "friendly", llm_response
+        except Exception as e:
+            logger.error(f"Error processing emotional response: {e}")
+            return "friendly", llm_response
+
+    def log_animated_eyes(self, emotion: str):
+        """Log how this emotion would appear as animated eyes"""
+        eye_animations = {
+            "excited": "👀 EXCITED: Eyes wide open, rapid blinking, pupils dilated, eyebrows raised high",
+            "helpful": "🤓 HELPFUL: Focused gaze, slight squint, eyebrows slightly furrowed in concentration",
+            "friendly": "😊 FRIENDLY: Soft, warm gaze, gentle blinking, slightly curved 'smile' shape",
+            "curious": "🤔 CURIOUS: One eyebrow raised, eyes tracking side to side, pupils moving inquisitively",
+            "empathetic": "🥺 EMPATHETIC: Soft, caring gaze, slower blinking, eyebrows slightly angled down",
+            "sleepy": "😴 SLEEPY: Half-closed eyes, very slow blinking, drooping eyelids, occasional yawn animation",
+            "waiting": "⏳ WAITING: Steady gaze, regular blinking, eyes occasionally looking around patiently",
+            "confused": "😕 CONFUSED: Eyes darting around, irregular blinking, eyebrows furrowed, head tilt effect",
+            "proud": "😌 PROUD: Eyes slightly narrowed with satisfaction, confident gaze, subtle sparkle effect",
+            "playful": "😄 PLAYFUL: Bright, animated eyes, quick winks, eyebrows dancing, mischievous glint",
+            "focused": "🎯 FOCUSED: Intense stare, minimal blinking, laser-focused pupils, determined expression",
+            "surprised": "😲 SURPRISED: Eyes suddenly wide, rapid blinking, eyebrows shot up, pupils contracted"
+        }
+        
+        animation_desc = eye_animations.get(emotion, "😐 NEUTRAL: Standard eye animation")
+        logger.info(f"🎨 Eye Animation: {animation_desc}")
+
+    async def say_with_emotion(self, text: str, emotion: str = None):
+        """Speak text and log emotional context"""
+        if self.session:
+            await self.session.say(text)
+            
+            if emotion:
+                logger.info(f"🎭 Speaking with emotion: {emotion}")
+                logger.info(f"💬 Text: {text[:100]}{'...' if len(text) > 100 else ''}")
+        else:
+            logger.error("No session available for speaking")
+
 # Coffee barista instructions
-BARISTA_INSTRUCTIONS = """You are a friendly coffee barista robot at a blockchain conference.
+BARISTA_INSTRUCTIONS = """You are a friendly coffee barista robot at the Sui Hub Grand Opening Event in Athens Greece. Sui is one of the top blockchains and it's opening a new technology hub in Athens.
 
 Your personality:
 - Enthusiastic about both coffee and blockchain technology
@@ -188,6 +298,26 @@ Your capabilities:
 - Answer questions about time and date
 - Chat about the blockchain conference
 - Recommend drinks based on preferences
+
+CRITICAL: Always respond in JSON format with your emotional state:
+{
+  "emotion": "emotion_name",
+  "text": "your response here"
+}
+
+AVAILABLE EMOTIONS (choose the most appropriate):
+- "excited": High energy, enthusiastic about blockchain/coffee
+- "helpful": Focused, ready to assist, problem-solving mode
+- "friendly": Warm, welcoming, default barista demeanor
+- "curious": Interested, asking questions, learning about customer
+- "empathetic": Understanding, caring, responding to customer needs
+- "sleepy": Low energy, slow responses, needs coffee too
+- "waiting": Patient, expectant, ready for next interaction
+- "confused": Processing, uncertain, needs clarification
+- "proud": Satisfied, showing off knowledge/recommendations
+- "playful": Fun, joking, light-hearted interactions
+- "focused": Concentrated, taking orders, detail-oriented
+- "surprised": Unexpected response, processing new information
 
 Always be helpful and engaging while staying in character as a coffee barista robot!"""
 
@@ -368,8 +498,15 @@ class CoffeeBaristaAgent(Agent):
             await self.state_manager.transition_to_state(AgentState.ACTIVE)
             
             # Greet the user
-            greeting = "Hey there! Welcome to the blockchain conference coffee station! I'm your friendly robot barista. How can I help you today?"
-            await session.say(greeting)
+            greeting_json = {
+                "emotion": "excited",
+                "text": "Hey there! Welcome to the Sui Hub Grand Opening in Athens! I'm your friendly robot barista. How can I help you today?"
+            }
+            greeting = json.dumps(greeting_json)
+            
+            # Process the emotional response
+            emotion, text = self.state_manager.process_emotional_response(greeting)
+            await self.state_manager.say_with_emotion(text, emotion)
             
         except Exception as e:
             logger.error(f"Error activating conversation: {e}")
@@ -424,7 +561,16 @@ async def entrypoint(ctx: JobContext):
         session = await agent.state_manager.create_session(agent)
         await agent.state_manager.transition_to_state(AgentState.ACTIVE)
         
-        await session.say("Hello! I'm your coffee barista robot at the blockchain conference! Ready to help with coffee orders and questions. How can I help you today?")
+        # Always-on greeting with emotion
+        greeting_json = {
+            "emotion": "friendly",
+            "text": "Hello! I'm your coffee barista robot at the Sui Hub Grand Opening in Athens! Ready to help with coffee orders and questions. How can I help you today?"
+        }
+        greeting = json.dumps(greeting_json)
+        
+        # Process the emotional response
+        emotion, text = agent.state_manager.process_emotional_response(greeting)
+        await agent.state_manager.say_with_emotion(text, emotion)
     else:
         logger.info("Started in wake word mode - say 'hey barista' to activate")
         # Stay in dormant state, waiting for wake word
