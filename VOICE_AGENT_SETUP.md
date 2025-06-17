@@ -1,17 +1,19 @@
-# LiveKit Voice Agent with OpenAI Integration
+# LiveKit Coffee Barista Voice Agent
 
-This is a production-ready Python voice agent built using the **LiveKit Agents Framework** with OpenAI integration. The agent supports both wake word detection and always-on voice interaction modes.
+This is a production-ready Python voice agent built using the **LiveKit Agents Framework** with OpenAI Realtime API integration. The agent acts as a helpful coffee barista robot at a blockchain conference, supporting wake word detection for hands-free interaction.
 
 ## 🎯 Features
 
-- **🎙️ LiveKit Agents Framework**: Built on LiveKit's production-grade agents framework
-- **🔊 Wake Word Detection**: Optional hands-free activation using Porcupine
-- **🤖 OpenAI Realtime API**: Low-latency voice-to-voice interaction (recommended)
-- **🔄 STT-LLM-TTS Pipeline**: Alternative traditional pipeline for customization
-- **🎵 Audio Processing**: Advanced VAD, turn detection, and noise cancellation
+- **🎙️ MultimodalAgent Architecture**: Built with LiveKit's advanced MultimodalAgent framework
+- **🔊 Smart Wake Word Detection**: "Hey Barista" activation with intelligent conversation management
+- **🤖 OpenAI Realtime API**: Ultra-low latency voice-to-voice interaction (~200ms)
+- **⚡ Thread-Safe State Management**: Robust multi-threaded wake word detection
+- **🔄 Smart Timer Management**: Automatic conversation timeout with user engagement detection
+- **🛡️ Duplicate Protection**: Prevents multiple wake word activations during conversation
+- **☕ Coffee Barista Theme**: Specialized for coffee ordering and blockchain conference context
 - **🛠️ Function Tools**: Built-in time/date functions with easy extensibility
 - **📞 Multi-mode Support**: Terminal, development, and production modes
-- **☁️ Cloud Integration**: Works with LiveKit Cloud and self-hosted servers
+- **🎵 Audio Processing**: Advanced VAD, turn detection, and conversation flow
 
 ## 🚀 Quick Start
 
@@ -32,17 +34,14 @@ OPENAI_API_KEY=your_openai_api_key_here
 # Optional: Wake Word Detection
 PORCUPINE_ACCESS_KEY=your_porcupine_access_key_here
 
-# Optional: LiveKit Cloud (for noise cancellation and cloud features)
+# Optional: LiveKit Cloud (recommended for production)
 LIVEKIT_API_KEY=your_livekit_api_key_here
 LIVEKIT_API_SECRET=your_livekit_api_secret_here
 LIVEKIT_URL=wss://your-livekit-server.com
 
-# Optional: STT-LLM-TTS Pipeline (if not using Realtime API)
-DEEPGRAM_API_KEY=your_deepgram_api_key_here
-CARTESIA_API_KEY=your_cartesia_api_key_here
-
-# Optional: Configuration
-USE_REALTIME_API=true  # Set to false to use STT-LLM-TTS pipeline
+# Agent Configuration
+VOICE_AGENT_TEMPERATURE=0.7  # AI response creativity (0.0-1.0)
+VOICE_AGENT_VOICE=nova      # OpenAI voice: alloy, echo, fable, onyx, nova, shimmer
 ```
 
 ### 3. Get API Keys
