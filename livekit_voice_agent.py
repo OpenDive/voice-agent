@@ -104,22 +104,26 @@ class StateManager:
         
         # Set up session event handlers
         @self.session.on("user_speech_committed")
-        async def on_user_speech(msg):
+        def on_user_speech(msg):
             """Reset conversation timer when user speaks"""
-            if self.conversation_timer:
-                self.conversation_timer.cancel()
-            self.conversation_timer = asyncio.create_task(self._conversation_timeout())
+            async def reset_timer():
+                if self.conversation_timer:
+                    self.conversation_timer.cancel()
+                self.conversation_timer = asyncio.create_task(self._conversation_timeout())
+            asyncio.create_task(reset_timer())
             
         @self.session.on("agent_speech_committed") 
-        async def on_agent_speech(msg):
+        def on_agent_speech(msg):
             """Handle agent speech completion"""
-            # Check if user said goodbye or similar
-            if hasattr(msg, 'text'):
-                text_lower = msg.text.lower()
-                if any(word in text_lower for word in ['goodbye', 'thanks', 'that\'s all', 'see you']):
-                    logger.info("Detected conversation ending phrase")
-                    await asyncio.sleep(2)  # Brief pause before ending
-                    await self.end_conversation()
+            async def check_ending():
+                # Check if user said goodbye or similar
+                if hasattr(msg, 'text'):
+                    text_lower = msg.text.lower()
+                    if any(word in text_lower for word in ['goodbye', 'thanks', 'that\'s all', 'see you']):
+                        logger.info("Detected conversation ending phrase")
+                        await asyncio.sleep(2)  # Brief pause before ending
+                        await self.end_conversation()
+            asyncio.create_task(check_ending())
         
         await self.session.start(agent=agent, room=self.ctx.room)
         return self.session
