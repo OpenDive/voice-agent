@@ -20,6 +20,11 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
+# Configurable timeout settings
+USER_RESPONSE_TIMEOUT = int(os.getenv("USER_RESPONSE_TIMEOUT", "15"))  # seconds
+FINAL_TIMEOUT = int(os.getenv("FINAL_TIMEOUT", "10"))  # seconds after prompt
+MAX_CONVERSATION_TIME = int(os.getenv("MAX_CONVERSATION_TIME", "300"))  # 5 minutes total
+
 class AgentState(Enum):
     DORMANT = "dormant"           # Only wake word detection active
     CONNECTING = "connecting"     # Creating LiveKit session  
@@ -32,7 +37,8 @@ class StateManager:
         self.current_state = AgentState.DORMANT
         self.state_lock = asyncio.Lock()
         self.session = None
-        self.conversation_timer = None
+        self.conversation_timer = None  # Max conversation time limit
+        self.user_response_timer = None  # Timer for waiting for user response
         self.ctx = None
         self.agent = agent
 
@@ -50,39 +56,58 @@ class StateManager:
     async def _exit_current_state(self):
         """Clean up current state"""
         if self.current_state == AgentState.ACTIVE:
-            # Cancel conversation timer
+            # Cancel conversation timers
             if self.conversation_timer:
                 self.conversation_timer.cancel()
                 self.conversation_timer = None
+            if self.user_response_timer:
+                self.user_response_timer.cancel()
+                self.user_response_timer = None
 
     async def _enter_new_state(self):
         """Initialize new state"""
         if self.current_state == AgentState.ACTIVE:
-            # Start conversation timer
-            self.conversation_timer = asyncio.create_task(self._conversation_timeout())
+            # Start max conversation timer (absolute limit)
+            self.conversation_timer = asyncio.create_task(self._max_conversation_timeout())
         elif self.current_state == AgentState.DORMANT:
             # Resume wake word detection when returning to dormant
             if self.agent:
                 self.agent.wake_word_paused = False
                 logger.info("Resumed wake word detection")
 
-    async def _conversation_timeout(self):
-        """Handle conversation timeout"""
+    async def _max_conversation_timeout(self):
+        """Handle maximum conversation time limit"""
         try:
-            # First timeout - prompt user (10 seconds)
-            await asyncio.sleep(10)
+            await asyncio.sleep(MAX_CONVERSATION_TIME)  # 5 minute absolute limit
             if self.session and self.current_state == AgentState.ACTIVE:
-                await self.session.say("Are you still there? Is there anything else I can help you with?")
-                
-                # Second timeout - end conversation (20 more seconds)
-                await asyncio.sleep(20)
-                if self.session and self.current_state == AgentState.ACTIVE:
-                    logger.info("Conversation timeout - ending session")
-                    await self.session.say("Thanks for chatting! Say 'hey barista' if you need me again.")
-                    await asyncio.sleep(2)  # Let the goodbye message play
-                    await self.end_conversation()
+                logger.info("Maximum conversation time reached - ending session")
+                await self.session.say("We've been chatting for a while! Thanks for the conversation. Say 'hey barista' if you need me again.")
+                await asyncio.sleep(2)
+                await self.end_conversation()
         except asyncio.CancelledError:
             pass
+
+    async def _wait_for_user_response(self):
+        """Wait for user response after agent speaks"""
+        try:
+            # Wait for user to respond
+            await asyncio.sleep(USER_RESPONSE_TIMEOUT)
+            
+            if self.session and self.current_state == AgentState.ACTIVE:
+                # Polite prompt
+                await self.session.say("Is there anything else I can help you with?")
+                
+                # Wait a bit more
+                await asyncio.sleep(FINAL_TIMEOUT)
+                
+                if self.session and self.current_state == AgentState.ACTIVE:
+                    # End conversation
+                    await self.session.say("Thanks for chatting! Say 'hey barista' if you need me again.")
+                    await asyncio.sleep(2)
+                    await self.end_conversation()
+                
+        except asyncio.CancelledError:
+            pass  # User spoke, timer cancelled
 
     async def create_session(self, agent) -> AgentSession:
         """Create new session when wake word detected"""
@@ -105,12 +130,12 @@ class StateManager:
         # Set up session event handlers
         @self.session.on("user_speech_committed")
         def on_user_speech(msg):
-            """Handle user speech - reset timer and check for conversation ending"""
+            """Handle user speech - cancel user response timer and check for conversation ending"""
             async def handle_user_speech():
-                # Reset conversation timer when user speaks
-                if self.conversation_timer:
-                    self.conversation_timer.cancel()
-                self.conversation_timer = asyncio.create_task(self._conversation_timeout())
+                # Cancel user response timer when user speaks
+                if self.user_response_timer:
+                    self.user_response_timer.cancel()
+                    self.user_response_timer = None
                 
                 # Check if user said goodbye or similar
                 if hasattr(msg, 'text'):
@@ -123,13 +148,13 @@ class StateManager:
             
         @self.session.on("agent_speech_committed") 
         def on_agent_speech(msg):
-            """Handle agent speech completion - just reset timer to prevent timeout during agent responses"""
-            async def reset_timer_after_agent_speech():
-                # Reset timer after agent speaks to prevent timeout during agent responses
-                if self.conversation_timer:
-                    self.conversation_timer.cancel()
-                self.conversation_timer = asyncio.create_task(self._conversation_timeout())
-            asyncio.create_task(reset_timer_after_agent_speech())
+            """Handle agent speech completion - start user response timer"""
+            async def start_user_response_timer():
+                # Start timer to wait for user response after agent finishes speaking
+                if self.user_response_timer:
+                    self.user_response_timer.cancel()
+                self.user_response_timer = asyncio.create_task(self._wait_for_user_response())
+            asyncio.create_task(start_user_response_timer())
         
         await self.session.start(agent=agent, room=self.ctx.room)
         return self.session
