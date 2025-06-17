@@ -1,16 +1,22 @@
 import asyncio
 import logging
 import os
+import threading
 from typing import Optional
 from dotenv import load_dotenv
 import pvporcupine
 from pvrecorder import PvRecorder
-import threading
 
-from livekit import agents
-from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli, function_tool
-from livekit.plugins import openai, deepgram, cartesia, silero, noise_cancellation
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from livekit.agents import (
+    AutoSubscribe,
+    JobContext,
+    WorkerOptions,
+    cli,
+    llm,
+)
+from livekit.agents.multimodal import MultimodalAgent
+from livekit.plugins import openai
+from datetime import datetime
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -19,58 +25,80 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
+# Instructions for the AI assistant
+INSTRUCTIONS = """You are a helpful coffee barista robot at a blockchain conference. 
 
-class WakeWordVoiceAssistant(Agent):
-    """
-    A LiveKit voice assistant that uses wake word detection to activate conversations.
-    Integrates Porcupine wake word detection with LiveKit agents framework.
-    """
+Key behaviors:
+- Keep responses concise and natural for voice interaction
+- Be friendly and conversational
+- Ask follow-up questions when appropriate
+- Use the available functions when users ask for time or date
+- If wake word detection is enabled, acknowledge when you're activated
+- Inquire about coffee preferences
+
+You can help with:
+- General questions and conversation
+- Telling the current time and date
+- Providing assistance with various topics
+"""
+
+WELCOME_MESSAGE = "Hello! I'm your coffee barista robot. How can I help you today?"
+
+WAKE_WORD_ACTIVATION_MESSAGE = "Hi! I heard you call me. What can I help you with?"
+
+
+class VoiceAgentContext:
+    """Context manager for voice agent state and wake word detection."""
     
     def __init__(self):
-        """Initialize the wake word voice assistant."""
-        super().__init__(instructions="You are a helpful voice assistant. You can help with questions, tasks, and conversation. Keep your responses concise and natural for voice interaction.")
-        
-        # Wake word detection setup
         self.porcupine_access_key = os.getenv("PORCUPINE_ACCESS_KEY")
         self.porcupine = None
         self.recorder = None
         self.wake_word_thread = None
         self.is_monitoring = False
         self.session = None
+        self.wake_word_detected = False
+        self.conversation_active = False
         
-        logger.info("Wake Word Voice Assistant initialized")
+    def has_wake_word_capability(self) -> bool:
+        """Check if wake word detection is available."""
+        return self.porcupine_access_key is not None
     
-    async def on_enter(self):
-        """Called when the agent enters a session."""
-        logger.info("Voice assistant entered session")
+    def should_respond_to_speech(self) -> bool:
+        """Determine if the agent should respond to user speech."""
+        if not self.has_wake_word_capability():
+            # Always respond if no wake word detection
+            return True
         
-        # Start wake word detection
-        if self.porcupine_access_key:
-            await self.start_wake_word_detection()
-        else:
-            logger.warning("No Porcupine access key provided, skipping wake word detection")
-            # Generate initial greeting
-            await self.session.generate_reply(
-                instructions="Greet the user and let them know you're ready to help."
-            )
+        # Only respond if wake word was detected or conversation is active
+        return self.wake_word_detected or self.conversation_active
     
-    async def on_exit(self):
-        """Called when the agent exits a session."""
-        logger.info("Voice assistant exiting session")
-        await self.stop_wake_word_detection()
+    def activate_conversation(self):
+        """Activate conversation mode."""
+        self.wake_word_detected = True
+        self.conversation_active = True
+        logger.info("Conversation activated")
+    
+    def deactivate_conversation(self):
+        """Deactivate conversation mode."""
+        self.wake_word_detected = False
+        self.conversation_active = False
+        logger.info("Conversation deactivated")
     
     async def start_wake_word_detection(self):
         """Start wake word detection in a separate thread."""
+        if not self.has_wake_word_capability():
+            logger.info("Wake word detection not available - running in always-on mode")
+            return
+            
         try:
             self.porcupine = pvporcupine.create(
                 access_key=self.porcupine_access_key,
-                keywords=["hey computer", "hey assistant"],
-                # You can also use custom wake word files:
-                # keyword_paths=["./wake_words/Hey-Coffee-Bot_en_linux_v3_0_0.ppn"]
+                keywords=["hey computer", "hey assistant", "hey barista"],
             )
             
             self.recorder = PvRecorder(
-                device_index=-1,  # Use default microphone
+                device_index=-1,
                 frame_length=self.porcupine.frame_length
             )
             
@@ -94,11 +122,13 @@ class WakeWordVoiceAssistant(Agent):
                     keyword_index = self.porcupine.process(pcm)
                     
                     if keyword_index >= 0:
-                        logger.info("Wake word detected! Activating voice assistant...")
-                        # Trigger conversation using asyncio
+                        logger.info("Wake word detected!")
+                        self.activate_conversation()
+                        
+                        # Send activation message if session is available
                         if self.session:
                             asyncio.run_coroutine_threadsafe(
-                                self._handle_wake_word(), 
+                                self._send_wake_word_response(),
                                 asyncio.get_event_loop()
                             )
                         
@@ -112,15 +142,18 @@ class WakeWordVoiceAssistant(Agent):
             if self.recorder:
                 self.recorder.stop()
     
-    async def _handle_wake_word(self):
-        """Handle wake word detection and start conversation."""
+    async def _send_wake_word_response(self):
+        """Send wake word activation response."""
         try:
-            # Generate a response to acknowledge the wake word
-            await self.session.generate_reply(
-                instructions="The user has said your wake word. Acknowledge that you heard them and ask how you can help."
+            self.session.conversation.item.create(
+                llm.ChatMessage(
+                    role="assistant",
+                    content=WAKE_WORD_ACTIVATION_MESSAGE
+                )
             )
+            self.session.response.create()
         except Exception as e:
-            logger.error(f"Error handling wake word: {e}")
+            logger.error(f"Error sending wake word response: {e}")
     
     async def stop_wake_word_detection(self):
         """Stop wake word detection and cleanup resources."""
@@ -138,120 +171,148 @@ class WakeWordVoiceAssistant(Agent):
             self.recorder = None
         
         logger.info("Wake word detection stopped")
-
-    @function_tool
-    async def get_current_time(self) -> str:
+    
+    # Function tools for the assistant
+    def get_current_time(self) -> str:
         """Get the current time."""
-        import datetime
-        current_time = datetime.datetime.now().strftime("%I:%M %p")
+        current_time = datetime.now().strftime("%I:%M %p")
         return f"The current time is {current_time}"
 
-    @function_tool
-    async def get_current_date(self) -> str:
+    def get_current_date(self) -> str:
         """Get the current date."""
-        import datetime
-        current_date = datetime.datetime.now().strftime("%B %d, %Y")
+        current_date = datetime.now().strftime("%B %d, %Y")
         return f"Today's date is {current_date}"
-
-
-class StandardVoiceAssistant(Agent):
-    """
-    A standard LiveKit voice assistant without wake word detection.
-    Use this for always-on voice interaction.
-    """
     
-    def __init__(self):
-        super().__init__(instructions="You are a helpful voice assistant. You can help with questions, tasks, and conversation. Keep your responses concise and natural for voice interaction.")
-        logger.info("Standard Voice Assistant initialized")
-    
-    async def on_enter(self):
-        """Called when the agent enters a session."""
-        logger.info("Voice assistant entered session")
-        await self.session.generate_reply(
-            instructions="Greet the user warmly and let them know you're ready to help with any questions or tasks."
-        )
-
-    @function_tool
-    async def get_current_time(self) -> str:
-        """Get the current time."""
-        import datetime
-        current_time = datetime.datetime.now().strftime("%I:%M %p")
-        return f"The current time is {current_time}"
-
-    @function_tool
-    async def get_current_date(self) -> str:
-        """Get the current date."""
-        import datetime
-        current_date = datetime.datetime.now().strftime("%B %d, %Y")
-        return f"Today's date is {current_date}"
+    def get_current_datetime(self) -> str:
+        """Get the current date and time."""
+        now = datetime.now()
+        date_str = now.strftime("%B %d, %Y")
+        time_str = now.strftime("%I:%M %p")
+        return f"Today is {date_str} and the current time is {time_str}"
 
 
 async def entrypoint(ctx: JobContext):
-    """
-    Main entrypoint for the LiveKit voice agent.
-    This function is called when a new job is dispatched to the worker.
-    """
-    await ctx.connect()
+    """Main entrypoint for the LiveKit voice agent."""
     
-    # Check if wake word detection is enabled
-    use_wake_word = os.getenv("PORCUPINE_ACCESS_KEY") is not None
+    # Connect to the room and wait for participant
+    await ctx.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_ALL)
+    await ctx.wait_for_participant()
     
-    if use_wake_word:
-        agent = WakeWordVoiceAssistant()
-        logger.info("Using wake word detection mode")
-    else:
-        agent = StandardVoiceAssistant()
-        logger.info("Using standard always-on mode")
+    # Initialize voice agent context
+    agent_ctx = VoiceAgentContext()
     
-    # Create the agent session with the AI pipeline
-    # You can choose between two approaches:
-    
-    # Option 1: Use OpenAI Realtime API (recommended for low latency)
-    if os.getenv("USE_REALTIME_API", "true").lower() == "true":
-        session = AgentSession(
-            llm=openai.realtime.RealtimeModel(
-                model="gpt-4o-realtime-preview",
-                voice="alloy",
-                temperature=0.8,
-            ),
-            vad=silero.VAD.load(),
-        )
-        logger.info("Using OpenAI Realtime API")
-    
-    # Option 2: Use traditional STT-LLM-TTS pipeline
-    else:
-        session = AgentSession(
-            stt=deepgram.STT(model="nova-3", language="multi"),
-            llm=openai.LLM(model="gpt-4o-mini"),
-            tts=cartesia.TTS(model="sonic-2", voice="f786b574-daa5-4673-aa0c-cbe3e8534c02"),
-            vad=silero.VAD.load(),
-            turn_detection=MultilingualModel(),
-        )
-        logger.info("Using STT-LLM-TTS pipeline")
-    
-    # Store session reference for wake word agent
-    if hasattr(agent, 'session'):
-        agent.session = session
-    
-    # Start the session with noise cancellation if available
-    room_input_options = None
-    if os.getenv("LIVEKIT_API_KEY"):  # Only use if LiveKit Cloud is configured
-        try:
-            from livekit.agents import RoomInputOptions
-            room_input_options = RoomInputOptions(
-                noise_cancellation=noise_cancellation.BVC(),
-            )
-            logger.info("Noise cancellation enabled")
-        except ImportError:
-            logger.info("Noise cancellation not available")
-    
-    await session.start(
-        room=ctx.room,
-        agent=agent,
-        room_input_options=room_input_options,
+    # Create the AI model
+    model = openai.realtime.RealtimeModel(
+        instructions=INSTRUCTIONS,
+        voice=os.getenv("OPENAI_VOICE", "alloy"),  # alloy, echo, fable, onyx, nova, shimmer
+        temperature=float(os.getenv("OPENAI_TEMPERATURE", "0.8")),
+        modalities=["audio", "text"]
     )
     
-    logger.info("Voice agent session started successfully")
+    # Create multimodal assistant
+    assistant = MultimodalAgent(model=model, fnc_ctx=agent_ctx)
+    assistant.start(ctx.room)
+    
+    # Get the session for direct management
+    session = model.sessions[0]
+    agent_ctx.session = session
+    
+    # Start wake word detection
+    await agent_ctx.start_wake_word_detection()
+    
+    # Send welcome message if no wake word detection
+    if not agent_ctx.has_wake_word_capability():
+        session.conversation.item.create(
+            llm.ChatMessage(
+                role="assistant",
+                content=WELCOME_MESSAGE
+            )
+        )
+        session.response.create()
+        agent_ctx.activate_conversation()
+    else:
+        logger.info("Wake word detection active. Say 'hey computer' or 'hey assistant' to start.")
+    
+    # Event handlers for speech processing
+    @session.on("user_speech_committed")
+    def on_user_speech_committed(msg: llm.ChatMessage):
+        """Handle committed user speech."""
+        if isinstance(msg.content, list):
+            msg.content = "\n".join("[image]" if isinstance(x, llm.ChatImage) else x for x in msg.content)
+        
+        logger.info(f"User said: {msg.content}")
+        
+        # Check if we should respond
+        if agent_ctx.should_respond_to_speech():
+            handle_user_message(msg)
+        else:
+            logger.info("Ignoring speech - wake word not detected")
+    
+    @session.on("agent_speech_committed")  
+    def on_agent_speech_committed(msg: llm.ChatMessage):
+        """Handle agent speech completion."""
+        logger.info(f"Assistant said: {msg.content}")
+        
+        # For wake word mode, deactivate after responding
+        if agent_ctx.has_wake_word_capability():
+            # Set a timer to deactivate conversation after a period of silence
+            asyncio.create_task(deactivate_after_delay())
+    
+    async def deactivate_after_delay():
+        """Deactivate conversation after a delay."""
+        await asyncio.sleep(10)  # Wait 10 seconds
+        if agent_ctx.conversation_active:
+            agent_ctx.deactivate_conversation()
+            logger.info("Conversation deactivated due to inactivity")
+    
+    def handle_user_message(msg: llm.ChatMessage):
+        """Process user message and generate response."""
+        try:
+            # Check for specific commands that might need function calls
+            content = msg.content.lower() if msg.content else ""
+            
+            # Handle time/date requests
+            if any(word in content for word in ["time", "clock", "hour"]):
+                response = agent_ctx.get_current_time()
+                send_function_response(response)
+            elif any(word in content for word in ["date", "today", "day"]):
+                response = agent_ctx.get_current_date()  
+                send_function_response(response)
+            elif any(word in content for word in ["datetime", "time and date", "date and time"]):
+                response = agent_ctx.get_current_datetime()
+                send_function_response(response)
+            else:
+                # Regular conversation
+                session.conversation.item.create(
+                    llm.ChatMessage(
+                        role="user",
+                        content=msg.content
+                    )
+                )
+                session.response.create()
+                
+        except Exception as e:
+            logger.error(f"Error handling user message: {e}")
+    
+    def send_function_response(response: str):
+        """Send a function response to the user."""
+        session.conversation.item.create(
+            llm.ChatMessage(
+                role="assistant",
+                content=response
+            )
+        )
+        session.response.create()
+    
+    try:
+        # Keep the agent running
+        logger.info("Voice agent is running...")
+        await asyncio.Event().wait()  # Run indefinitely
+        
+    except KeyboardInterrupt:
+        logger.info("Shutting down voice agent...")
+    finally:
+        await agent_ctx.stop_wake_word_detection()
 
 
 def main():
@@ -266,21 +327,17 @@ def main():
         logger.error("Please check your .env file and ensure all required API keys are set.")
         return
     
-    # Check optional variables
-    if not os.getenv("PORCUPINE_ACCESS_KEY"):
-        logger.warning("PORCUPINE_ACCESS_KEY not set. Wake word detection will be disabled.")
+    # Log configuration
+    logger.info("🎙️ Starting LiveKit MultimodalAgent Voice Assistant...")
+    logger.info(f"Wake Word Detection: {'✅ Enabled' if os.getenv('PORCUPINE_ACCESS_KEY') else '❌ Disabled (always-on mode)'}")
+    logger.info(f"OpenAI Voice: {os.getenv('OPENAI_VOICE', 'alloy')}")
+    logger.info(f"Temperature: {os.getenv('OPENAI_TEMPERATURE', '0.8')}")
     
-    if not os.getenv("DEEPGRAM_API_KEY") and os.getenv("USE_REALTIME_API", "true").lower() != "true":
-        logger.warning("DEEPGRAM_API_KEY not set. STT-LLM-TTS pipeline will not work.")
-    
-    if not os.getenv("CARTESIA_API_KEY") and os.getenv("USE_REALTIME_API", "true").lower() != "true":
-        logger.warning("CARTESIA_API_KEY not set. STT-LLM-TTS pipeline will not work.")
-    
-    logger.info("Starting LiveKit Voice Agent...")
-    logger.info("Available modes:")
-    logger.info("  python livekit.py console  - Run in terminal mode")
-    logger.info("  python livekit.py dev      - Run in development mode")
-    logger.info("  python livekit.py start    - Run in production mode")
+    logger.info("\n📋 Available CLI modes:")
+    logger.info("  python livekit.py console  - Terminal mode (local testing)")
+    logger.info("  python livekit.py dev      - Development mode (connect to LiveKit)")
+    logger.info("  python livekit.py start    - Production mode")
+    logger.info("  python livekit.py download-files - Download model files\n")
     
     # Run the agent with LiveKit CLI
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
