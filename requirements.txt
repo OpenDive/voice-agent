@@ -1,5 +1,7 @@
 python-dotenv
 pvporcupine==3.0.5
 pvrecorder==1.2.7
-livekit-agents[openai,deepgram,cartesia,silero,turn-detector]~=1.0
-livekit-plugins-noise-cancellation~=0.2
+livekit
+livekit-agents[openai,deepgram,silero,turn-detector]
+livekit-plugins-noise-cancellation
+# cartesia
