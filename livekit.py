@@ -60,6 +60,7 @@ class VoiceAgentContext:
         self.wake_word_detected = False
         self.conversation_active = False
         self.deactivation_timer = None  # Track current timer task
+        self.wake_word_paused = False  # Track if wake word detection is paused
         
     def has_wake_word_capability(self) -> bool:
         """Check if wake word detection is available."""
@@ -74,18 +75,21 @@ class VoiceAgentContext:
         # Only respond if wake word was detected or conversation is active
         return self.wake_word_detected or self.conversation_active
     
-    def activate_conversation(self):
+    async def activate_conversation(self):
         """Activate conversation mode."""
-        self.wake_word_detected = True
-        self.conversation_active = True
-        logger.info("Conversation activated")
+        if not (self.wake_word_detected and self.conversation_active):  # Prevent duplicate activations
+            self.wake_word_detected = True
+            self.conversation_active = True
+            self.wake_word_paused = True  # Pause wake word detection during conversation
+            logger.info("Conversation activated - wake word detection paused")
     
     def deactivate_conversation(self):
         """Deactivate conversation mode."""
         self.wake_word_detected = False
         self.conversation_active = False
+        self.wake_word_paused = False  # Resume wake word detection
         self.cancel_deactivation_timer()  # Cancel any pending timer
-        logger.info("Conversation deactivated")
+        logger.info("Conversation deactivated - wake word detection resumed")
     
     async def start_wake_word_detection(self):
         """Start wake word detection in a separate thread."""
@@ -121,18 +125,30 @@ class VoiceAgentContext:
             while self.is_monitoring:
                 try:
                     pcm = self.recorder.read()
+                    
+                    # Skip processing if wake word detection is paused
+                    if self.wake_word_paused:
+                        continue
+                    
                     keyword_index = self.porcupine.process(pcm)
                     
                     if keyword_index >= 0:
                         logger.info("Wake word detected!")
-                        self.activate_conversation()
                         
-                        # Send activation message if session is available
-                        if self.session:
+                        # Double-check if conversation is already active (race condition protection)
+                        if self.conversation_active:
+                            logger.debug("Ignoring wake word - conversation already active")
+                            continue
+                        
+                        # Schedule activation on main thread (thread-safe)
+                        try:
+                            loop = asyncio.get_event_loop()
                             asyncio.run_coroutine_threadsafe(
-                                self._send_wake_word_response(),
-                                asyncio.get_event_loop()
+                                self._handle_wake_word_activation(),
+                                loop
                             )
+                        except RuntimeError:
+                            logger.warning("Could not schedule wake word activation - event loop not available")
                         
                 except Exception as e:
                     logger.error(f"Error processing wake word audio: {e}")
@@ -144,6 +160,19 @@ class VoiceAgentContext:
             if self.recorder:
                 self.recorder.stop()
     
+    async def _handle_wake_word_activation(self):
+        """Handle wake word activation on main thread (thread-safe)."""
+        try:
+            # Activate conversation (prevents duplicates)
+            await self.activate_conversation()
+            
+            # Send activation message if session is available
+            if self.session:
+                await self._send_wake_word_response()
+                
+        except Exception as e:
+            logger.error(f"Error handling wake word activation: {e}")
+
     async def _send_wake_word_response(self):
         """Send wake word activation response."""
         try:
@@ -263,7 +292,7 @@ async def entrypoint(ctx: JobContext):
             )
         )
         session.response.create()
-        agent_ctx.activate_conversation()
+        await agent_ctx.activate_conversation()
     else:
         logger.info("Wake word detection active. Say 'hey computer' or 'hey assistant' to start.")
     
