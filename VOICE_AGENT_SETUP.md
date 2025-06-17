@@ -82,41 +82,45 @@ python livekit.py start
 
 ## 🏗️ Architecture
 
-The agent uses LiveKit's modern agents framework:
+The coffee barista agent uses LiveKit's advanced MultimodalAgent framework with thread-safe wake word detection:
 
 ```
-User Voice → LiveKit Room → Agent Session → AI Pipeline → Voice Response
+User Voice → LiveKit Room → MultimodalAgent Session → OpenAI Realtime API → Voice Response
+                              ↑
+                    Wake Word Detection Thread
 ```
 
-### 🎯 Two Operation Modes
+### 🎯 Operational Modes
 
 **Wake Word Mode** (when `PORCUPINE_ACCESS_KEY` is set):
-- Continuously monitors for "hey computer" or "hey assistant"
+- Continuously monitors for "hey barista"
 - Activates conversation on wake word detection
-- Efficient power usage
+- Intelligent conversation state management
+- Automatic wake word pausing during conversation
+- Smart timer-based conversation timeout
 
 **Always-On Mode** (when no wake word key):
 - Immediately ready for conversation
-- Greets user and waits for input
+- Greets user as coffee barista
 - Higher engagement but more power usage
 
-### 🔄 Two AI Pipeline Options
+### 🚀 Key Technical Improvements
 
-**Option 1: OpenAI Realtime API** (Default - Recommended):
-```
-Voice → OpenAI Realtime API → Voice
-```
-- Ultra-low latency
-- Natural conversation flow
-- Built-in interruption handling
+**Thread-Safe Wake Word Detection**:
+- Uses `asyncio.run_coroutine_threadsafe()` for thread safety
+- Prevents race conditions between wake word and main threads
+- Duplicate activation protection
 
-**Option 2: Traditional STT-LLM-TTS Pipeline**:
-```
-Voice → Deepgram STT → OpenAI LLM → Cartesia TTS → Voice
-```
-- More customizable
-- Mix and match providers
-- Advanced control over each step
+**Smart Timer Management**:
+- Single timer tracking (prevents multiple concurrent timers)
+- Automatic cancellation when user speaks
+- Intelligent restart after agent responses
+- Proper cleanup on conversation end
+
+**Conversation State Management**:
+- Pauses wake word detection during active conversation
+- Prevents multiple simultaneous activations
+- Graceful conversation ending with timer-based timeout
 
 ## 📖 Usage Examples
 
@@ -139,17 +143,17 @@ Connects to LiveKit server. Access via:
 
 **Wake Word Mode:**
 ```
-User: "hey computer"
-Assistant: "Hi! I heard you call me. How can I help you today?"
+User: "hey barista"
+Barista: "Hey there! Welcome to the blockchain conference coffee station! I'm your friendly robot barista. How can I help you today?"
 User: "What time is it?"
-Assistant: "The current time is 2:30 PM"
+Barista: "The current time is 2:30 PM. Perfect time for an afternoon coffee! Would you like me to recommend something?"
 ```
 
 **Always-On Mode:**
 ```
-Assistant: "Hello! I'm your voice assistant. I'm ready to help with any questions or tasks."
+Barista: "Hello! I'm your robot barista here at the blockchain conference! Ready to help with coffee orders, questions about the event, or just chat!"
 User: "What's today's date?"
-Assistant: "Today's date is January 15, 2025"
+Barista: "Today's date is January 15, 2025. Great day for the conference! Can I get you something to drink?"
 ```
 
 ## ⚙️ Configuration
@@ -158,26 +162,27 @@ Assistant: "Today's date is January 15, 2025"
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `OPENAI_API_KEY` | ✅ | OpenAI API key for AI responses |
-| `PORCUPINE_ACCESS_KEY` | ❌ | Enable wake word detection |
-| `LIVEKIT_API_KEY` | ❌ | LiveKit Cloud API key |
+| `OPENAI_API_KEY` | ✅ | OpenAI API key for Realtime API |
+| `PORCUPINE_ACCESS_KEY` | ❌ | Enable "hey barista" wake word detection |
+| `LIVEKIT_API_KEY` | ❌ | LiveKit Cloud API key (recommended) |
 | `LIVEKIT_API_SECRET` | ❌ | LiveKit Cloud API secret |
-| `DEEPGRAM_API_KEY` | ❌ | For STT pipeline mode |
-| `CARTESIA_API_KEY` | ❌ | For TTS pipeline mode |
-| `USE_REALTIME_API` | ❌ | `true` (default) or `false` |
+| `VOICE_AGENT_TEMPERATURE` | ❌ | AI creativity level (0.0-1.0, default: 0.7) |
+| `VOICE_AGENT_VOICE` | ❌ | OpenAI voice (default: nova) |
 
 ### Customizing Wake Words
 
-Edit the `start_wake_word_detection()` method:
+The agent currently uses "hey barista" as the wake word. To customize, edit the `start_wake_word_detection()` method:
 
 ```python
 self.porcupine = pvporcupine.create(
     access_key=self.porcupine_access_key,
-    keywords=["hey computer", "hey assistant", "wake up"],  # Add more
+    keywords=["hey barista", "coffee bot", "hey coffee"],  # Add more keywords
     # Or use custom wake word files:
     # keyword_paths=["./wake_words/custom_wake_word.ppn"]
 )
 ```
+
+Note: The agent will automatically pause wake word detection during active conversations to prevent duplicate activations.
 
 ### Adding Custom Functions
 
@@ -191,54 +196,58 @@ async def get_weather(self, location: str) -> str:
     return f"The weather in {location} is sunny and 72°F"
 ```
 
-### Switching AI Providers
+### Customizing the AI Model
 
-**For Realtime API:**
+The agent uses OpenAI's Realtime API with the MultimodalAgent architecture:
+
 ```python
-session = AgentSession(
-    llm=openai.realtime.RealtimeModel(
-        model="gpt-4o-realtime-preview",  # or other models
-        voice="nova",  # alloy, echo, fable, onyx, nova, shimmer
-        temperature=0.7,
-    ),
-    vad=silero.VAD.load(),
+# In the agent configuration
+model = openai.realtime.RealtimeModel(
+    model="gpt-4o-realtime-preview",
+    voice=os.getenv("VOICE_AGENT_VOICE", "nova"),
+    temperature=float(os.getenv("VOICE_AGENT_TEMPERATURE", "0.7")),
+    instructions="""You are a helpful robot barista at a blockchain conference..."""
 )
+
+agent = MultimodalAgent(model=model)
 ```
 
-**For STT-LLM-TTS Pipeline:**
-```python
-session = AgentSession(
-    stt=deepgram.STT(model="nova-3"),      # or openai.STT()
-    llm=openai.LLM(model="gpt-4o"),       # or other LLM providers
-    tts=cartesia.TTS(voice="sonic"),      # or openai.TTS()
-    vad=silero.VAD.load(),
-    turn_detection=MultilingualModel(),
-)
-```
+**Available Voices**: alloy, echo, fable, onyx, nova, shimmer
+**Temperature Range**: 0.0 (deterministic) to 1.0 (creative)
 
 ## 🔧 Advanced Features
 
-### Noise Cancellation
-Automatically enabled when using LiveKit Cloud:
+### Thread-Safe Wake Word Management
+The agent implements sophisticated thread safety:
 ```python
-room_input_options = RoomInputOptions(
-    noise_cancellation=noise_cancellation.BVC(),
+# Safe state transitions between threads
+asyncio.run_coroutine_threadsafe(
+    self.activate_conversation(room), 
+    self.event_loop
 )
+
+# Automatic wake word pausing during conversation
+self.wake_word_paused = True  # Prevents duplicate activations
 ```
 
-### Turn Detection
-Advanced semantic turn detection for natural conversations:
+### Smart Timer Management
+Intelligent conversation timeout with user engagement detection:
 ```python
-turn_detection=MultilingualModel()  # Supports multiple languages
+# Single timer tracking prevents multiple concurrent timers
+if self.timeout_timer:
+    self.timeout_timer.cancel()
+
+# Restarts after agent speaks, cancelled when user speaks
+self.timeout_timer = asyncio.create_task(self.conversation_timeout())
 ```
 
-### Multi-Agent Handoff
-Build complex workflows with agent handoffs:
+### Event-Driven Architecture
+Direct session management with real-time event handling:
 ```python
-class SpecialistAgent(Agent):
-    async def on_enter(self):
-        # Handle specialized tasks
-        pass
+@session.on("user_speech_committed")
+async def on_user_speech_committed(self, message: rtc.ChatMessage):
+    # Process user speech and manage conversation flow
+    pass
 ```
 
 ## 📞 Integration Options
@@ -290,7 +299,8 @@ LiveKit agents support horizontal scaling and load balancing.
 **Wake Word Not Working:**
 - Check `PORCUPINE_ACCESS_KEY` is set correctly
 - Ensure microphone permissions are granted
-- Try speaking clearly: "hey computer" or "hey assistant"
+- Try speaking clearly: "hey barista"
+- Check that wake word detection isn't paused during conversation
 
 **No Audio Output:**
 - Check system audio settings
@@ -301,6 +311,21 @@ LiveKit agents support horizontal scaling and load balancing.
 - Verify LiveKit credentials if using cloud features
 - Check network connectivity
 - Try local mode first: `python livekit.py console`
+
+**Multiple Wake Word Activations:**
+- Agent automatically prevents duplicate activations
+- Wake word detection pauses during active conversation
+- If issues persist, check for race conditions in logs
+
+**Timer Issues:**
+- Agent uses single timer tracking to prevent conflicts
+- Timer cancels when user speaks, restarts after agent responds
+- Check logs for timer management debug information
+
+**Thread Safety Issues:**
+- All state changes use `asyncio.run_coroutine_threadsafe()`
+- Wake word detection runs in separate thread
+- If experiencing crashes, check for proper event loop handling
 
 ### Debug Mode
 ```python
@@ -317,40 +342,75 @@ python -c "import pvporcupine; print('Porcupine available')"
 
 # Test OpenAI connection
 python -c "from openai import OpenAI; print('OpenAI available')"
+
+# Test thread safety
+python -c "import asyncio; print('Event loop support available')"
 ```
 
 ## 🎨 Customization Examples
 
-### Personality Customization
+### Coffee Shop Personality
+The current implementation uses a coffee barista theme:
 ```python
-class FriendlyAssistant(Agent):
-    def __init__(self):
-        super().__init__(
-            instructions="You are a friendly, enthusiastic assistant who loves helping people. Use a warm, conversational tone and ask follow-up questions to be more helpful."
-        )
+instructions = """You are a helpful robot barista at a blockchain conference. 
+You're enthusiastic about coffee and technology. Keep responses conversational 
+and offer coffee recommendations when appropriate."""
 ```
 
-### Domain-Specific Agent
+### Wake Word Customization
 ```python
-class MedicalAssistant(Agent):
-    def __init__(self):
-        super().__init__(
-            instructions="You are a medical assistant. Always remind users to consult healthcare professionals for medical advice."
-        )
-    
-    @function_tool
-    async def schedule_appointment(self, date: str, time: str) -> str:
-        """Schedule a medical appointment."""
-        # Integration with calendar system
-        return f"Appointment scheduled for {date} at {time}"
+# Multiple wake words for coffee context
+self.porcupine = pvporcupine.create(
+    access_key=self.porcupine_access_key,
+    keywords=["hey barista", "coffee bot", "hey coffee"]
+)
 ```
+
+### Custom Function Tools
+```python
+@function_tool
+async def get_coffee_menu(self) -> str:
+    """Get the current coffee menu."""
+    return "Today's specials: Blockchain Blend, Crypto Cappuccino, DeFi Decaf"
+
+@function_tool  
+async def place_order(self, drink: str, size: str) -> str:
+    """Place a coffee order."""
+    return f"Perfect! I've noted your order for a {size} {drink}. It'll be ready shortly!"
+```
+
+## 🔄 Recent Improvements & Fixes
+
+### Version History
+
+**Latest Update: Production-Ready Voice Agent**
+- ✅ **Timer Race Conditions Fixed**: Implemented single timer tracking with proper cancellation
+- ✅ **Thread Safety Resolved**: Added `asyncio.run_coroutine_threadsafe()` for safe state transitions  
+- ✅ **Multiple Wake Word Protection**: Prevents duplicate activations during conversation
+- ✅ **Smart Conversation Management**: Wake word detection pauses during active conversation
+- ✅ **Event-Driven Architecture**: Direct session management with real-time event handling
+- ✅ **Coffee Barista Theme**: Specialized for blockchain conference coffee station
+
+**Key Technical Improvements**:
+- Upgraded from basic Agent to MultimodalAgent architecture
+- Implemented sophisticated timer management system
+- Added comprehensive thread safety measures
+- Built intelligent conversation state tracking
+- Enhanced wake word detection with pause/resume capability
+
+**Performance Characteristics**:
+- ⚡ **Ultra-Low Latency**: ~200ms with OpenAI Realtime API
+- 🛡️ **Thread-Safe**: Robust multi-threaded wake word detection
+- 🎯 **Smart Activation**: Intelligent wake word activation without duplicates
+- ⏱️ **Automatic Timeout**: Graceful conversation ending with timer management
+- 🔄 **State Management**: Clean conversation lifecycle with proper cleanup
 
 ## 📈 Performance Optimization
 
-- **Realtime API**: Lowest latency (~200ms)
-- **STT-LLM-TTS**: Higher latency but more customizable
-- **Local Models**: Use for privacy-sensitive applications
-- **Caching**: Implement response caching for common queries
+- **OpenAI Realtime API**: Lowest latency (~200ms) with built-in turn detection
+- **MultimodalAgent**: Production-grade architecture with advanced session management
+- **Thread Safety**: Prevents race conditions and crashes in multi-threaded environment
+- **Smart Timers**: Single timer tracking eliminates multiple concurrent timer conflicts
 
 ## 📝 License & Credits
 
