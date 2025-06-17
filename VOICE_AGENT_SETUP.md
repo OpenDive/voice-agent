@@ -1,17 +1,19 @@
 # LiveKit Voice Agent with OpenAI Integration
 
-This is a comprehensive Python voice agent that integrates LiveKit's audio processing capabilities with OpenAI's conversational AI. The agent uses wake word detection and provides full voice-to-voice interaction.
+This is a production-ready Python voice agent built using the **LiveKit Agents Framework** with OpenAI integration. The agent supports both wake word detection and always-on voice interaction modes.
 
-## Features
+## 🎯 Features
 
-- **Wake Word Detection**: Uses Porcupine for hands-free activation
-- **Speech-to-Text**: OpenAI Whisper for accurate transcription
-- **Conversational AI**: OpenAI GPT for intelligent responses
-- **Text-to-Speech**: OpenAI TTS for natural voice synthesis
-- **LiveKit Integration**: Real-time audio processing and room management
-- **Multi-threaded Design**: Efficient audio processing and conversation handling
+- **🎙️ LiveKit Agents Framework**: Built on LiveKit's production-grade agents framework
+- **🔊 Wake Word Detection**: Optional hands-free activation using Porcupine
+- **🤖 OpenAI Realtime API**: Low-latency voice-to-voice interaction (recommended)
+- **🔄 STT-LLM-TTS Pipeline**: Alternative traditional pipeline for customization
+- **🎵 Audio Processing**: Advanced VAD, turn detection, and noise cancellation
+- **🛠️ Function Tools**: Built-in time/date functions with easy extensibility
+- **📞 Multi-mode Support**: Terminal, development, and production modes
+- **☁️ Cloud Integration**: Works with LiveKit Cloud and self-hosted servers
 
-## Setup Instructions
+## 🚀 Quick Start
 
 ### 1. Install Dependencies
 
@@ -21,183 +23,341 @@ pip install -r requirements.txt
 
 ### 2. Configure Environment Variables
 
-Create a `.env` file in the project root with the following variables:
+Create a `.env` file in the project root:
 
 ```env
-# Required: Porcupine Wake Word Detection
-PORCUPINE_ACCESS_KEY=your_porcupine_access_key_here
-
 # Required: OpenAI API Configuration
 OPENAI_API_KEY=your_openai_api_key_here
 
-# Optional: LiveKit Configuration (for cloud deployment)
+# Optional: Wake Word Detection
+PORCUPINE_ACCESS_KEY=your_porcupine_access_key_here
+
+# Optional: LiveKit Cloud (for noise cancellation and cloud features)
 LIVEKIT_API_KEY=your_livekit_api_key_here
 LIVEKIT_API_SECRET=your_livekit_api_secret_here
 LIVEKIT_URL=wss://your-livekit-server.com
+
+# Optional: STT-LLM-TTS Pipeline (if not using Realtime API)
+DEEPGRAM_API_KEY=your_deepgram_api_key_here
+CARTESIA_API_KEY=your_cartesia_api_key_here
+
+# Optional: Configuration
+USE_REALTIME_API=true  # Set to false to use STT-LLM-TTS pipeline
 ```
 
 ### 3. Get API Keys
 
-#### Porcupine Access Key
+#### 🔑 OpenAI API Key (Required)
+1. Sign up at [OpenAI Platform](https://platform.openai.com/)
+2. Create an API key
+3. Add to your `.env` file
+
+#### 🎙️ Porcupine Access Key (Optional - for wake words)
 1. Sign up at [Picovoice Console](https://console.picovoice.ai/)
-2. Create a new project
-3. Copy your Access Key
+2. Create a project and get your Access Key
+3. Add to your `.env` file
 
-#### OpenAI API Key
-1. Sign up at [OpenAI](https://platform.openai.com/)
-2. Go to API Keys section
-3. Create a new API key
-4. Copy the key
-
-#### LiveKit Credentials (Optional)
+#### ☁️ LiveKit Credentials (Optional - for cloud features)
 1. Sign up at [LiveKit Cloud](https://livekit.io/)
-2. Create a new project
-3. Copy your API Key and Secret
+2. Create a project
+3. Copy API Key and Secret
 
-## Usage
-
-### Running the Voice Agent
+### 4. Download Model Files
 
 ```bash
-python livekit.py
+python livekit.py download-files
 ```
 
-### Voice Interaction Flow
+### 5. Run the Agent
 
-1. **Wake Word**: Say "hey computer" or "hey assistant"
-2. **Listen**: The agent will indicate it's listening
-3. **Speak**: Say your question or command (you have 5 seconds)
-4. **Response**: The agent will respond with voice
+```bash
+# Terminal mode (local testing)
+python livekit.py console
+
+# Development mode (connect to LiveKit)
+python livekit.py dev
+
+# Production mode
+python livekit.py start
+```
+
+## 🏗️ Architecture
+
+The agent uses LiveKit's modern agents framework:
+
+```
+User Voice → LiveKit Room → Agent Session → AI Pipeline → Voice Response
+```
+
+### 🎯 Two Operation Modes
+
+**Wake Word Mode** (when `PORCUPINE_ACCESS_KEY` is set):
+- Continuously monitors for "hey computer" or "hey assistant"
+- Activates conversation on wake word detection
+- Efficient power usage
+
+**Always-On Mode** (when no wake word key):
+- Immediately ready for conversation
+- Greets user and waits for input
+- Higher engagement but more power usage
+
+### 🔄 Two AI Pipeline Options
+
+**Option 1: OpenAI Realtime API** (Default - Recommended):
+```
+Voice → OpenAI Realtime API → Voice
+```
+- Ultra-low latency
+- Natural conversation flow
+- Built-in interruption handling
+
+**Option 2: Traditional STT-LLM-TTS Pipeline**:
+```
+Voice → Deepgram STT → OpenAI LLM → Cartesia TTS → Voice
+```
+- More customizable
+- Mix and match providers
+- Advanced control over each step
+
+## 📖 Usage Examples
+
+### Terminal Mode
+```bash
+python livekit.py console
+```
+Perfect for development and testing. Speaks directly through your computer's speakers.
+
+### Development Mode
+```bash
+python livekit.py dev
+```
+Connects to LiveKit server. Access via:
+- [Agents Playground](https://agents-playground.livekit.io/)
+- Custom web/mobile apps
+- Phone calls (with SIP integration)
 
 ### Example Conversation
 
+**Wake Word Mode:**
 ```
 User: "hey computer"
-Agent: "Wake word detected! Starting conversation... Listening for your question..."
-User: "What's the weather like today?"
-Agent: "I'm a voice assistant, but I don't have access to real-time weather data..."
+Assistant: "Hi! I heard you call me. How can I help you today?"
+User: "What time is it?"
+Assistant: "The current time is 2:30 PM"
 ```
 
-## Architecture
-
-### Components
-
-1. **LiveKitVoiceAgent**: Main class that orchestrates all components
-2. **Wake Word Detection**: Continuous monitoring using Porcupine
-3. **Audio Recording**: Captures conversation audio using sounddevice
-4. **Speech Processing**: OpenAI Whisper for transcription
-5. **AI Response**: OpenAI GPT for generating responses
-6. **Voice Synthesis**: OpenAI TTS for speech output
-7. **LiveKit Integration**: Optional room management and real-time communication
-
-### Audio Pipeline
-
+**Always-On Mode:**
 ```
-Microphone → Wake Word Detection → Audio Recording → Speech-to-Text → AI Processing → Text-to-Speech → Speaker
+Assistant: "Hello! I'm your voice assistant. I'm ready to help with any questions or tasks."
+User: "What's today's date?"
+Assistant: "Today's date is January 15, 2025"
 ```
 
-## Configuration Options
+## ⚙️ Configuration
 
-### Wake Words
-You can customize wake words in the `setup_wake_word_detection()` method:
+### Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `OPENAI_API_KEY` | ✅ | OpenAI API key for AI responses |
+| `PORCUPINE_ACCESS_KEY` | ❌ | Enable wake word detection |
+| `LIVEKIT_API_KEY` | ❌ | LiveKit Cloud API key |
+| `LIVEKIT_API_SECRET` | ❌ | LiveKit Cloud API secret |
+| `DEEPGRAM_API_KEY` | ❌ | For STT pipeline mode |
+| `CARTESIA_API_KEY` | ❌ | For TTS pipeline mode |
+| `USE_REALTIME_API` | ❌ | `true` (default) or `false` |
+
+### Customizing Wake Words
+
+Edit the `start_wake_word_detection()` method:
 
 ```python
 self.porcupine = pvporcupine.create(
     access_key=self.porcupine_access_key,
-    keywords=["hey computer", "hey assistant", "wake up"],  # Add your keywords
+    keywords=["hey computer", "hey assistant", "wake up"],  # Add more
     # Or use custom wake word files:
     # keyword_paths=["./wake_words/custom_wake_word.ppn"]
 )
 ```
 
-### Recording Duration
-Adjust the listening duration in `start_conversation()`:
+### Adding Custom Functions
+
+The agent supports function tools that can be called during conversation:
 
 ```python
-audio_data = await self.record_conversation_audio(duration=10)  # 10 seconds
+@function_tool
+async def get_weather(self, location: str) -> str:
+    """Get weather information for a location."""
+    # Your weather API integration here
+    return f"The weather in {location} is sunny and 72°F"
 ```
 
-### OpenAI Model Configuration
-Modify the AI model settings in `get_openai_response()`:
+### Switching AI Providers
 
+**For Realtime API:**
 ```python
-response = await self.openai_client.chat.completions.create(
-    model="gpt-4",  # Use GPT-4 for better responses
-    max_tokens=200,  # Longer responses
-    temperature=0.5  # More deterministic responses
+session = AgentSession(
+    llm=openai.realtime.RealtimeModel(
+        model="gpt-4o-realtime-preview",  # or other models
+        voice="nova",  # alloy, echo, fable, onyx, nova, shimmer
+        temperature=0.7,
+    ),
+    vad=silero.VAD.load(),
 )
 ```
 
-### Voice Configuration
-Change the TTS voice in `text_to_speech_and_play()`:
-
+**For STT-LLM-TTS Pipeline:**
 ```python
-response = await self.openai_client.audio.speech.create(
-    model="tts-1-hd",  # Higher quality TTS
-    voice="nova",      # Different voice (alloy, echo, fable, onyx, nova, shimmer)
-    input=text
+session = AgentSession(
+    stt=deepgram.STT(model="nova-3"),      # or openai.STT()
+    llm=openai.LLM(model="gpt-4o"),       # or other LLM providers
+    tts=cartesia.TTS(voice="sonic"),      # or openai.TTS()
+    vad=silero.VAD.load(),
+    turn_detection=MultilingualModel(),
 )
 ```
 
-## Troubleshooting
+## 🔧 Advanced Features
+
+### Noise Cancellation
+Automatically enabled when using LiveKit Cloud:
+```python
+room_input_options = RoomInputOptions(
+    noise_cancellation=noise_cancellation.BVC(),
+)
+```
+
+### Turn Detection
+Advanced semantic turn detection for natural conversations:
+```python
+turn_detection=MultilingualModel()  # Supports multiple languages
+```
+
+### Multi-Agent Handoff
+Build complex workflows with agent handoffs:
+```python
+class SpecialistAgent(Agent):
+    async def on_enter(self):
+        # Handle specialized tasks
+        pass
+```
+
+## 📞 Integration Options
+
+### Web & Mobile Apps
+Use LiveKit's client SDKs:
+- **JavaScript/React**: `livekit-client`
+- **iOS/macOS**: `client-sdk-swift`
+- **Android**: `client-sdk-android`
+- **Flutter**: `client-sdk-flutter`
+
+### Telephony
+Connect to phone systems using LiveKit SIP:
+```bash
+# Your agent can receive phone calls!
+```
+
+### WebRTC
+Direct browser integration without downloads or apps.
+
+## 🚀 Deployment
+
+### Development
+```bash
+python livekit.py dev
+```
+
+### Production
+```bash
+python livekit.py start
+```
+
+### Docker Deployment
+```dockerfile
+FROM python:3.9-slim
+COPY . /app
+WORKDIR /app
+RUN pip install -r requirements.txt
+CMD ["python", "livekit.py", "start"]
+```
+
+### Kubernetes
+LiveKit agents support horizontal scaling and load balancing.
+
+## 🛠️ Troubleshooting
 
 ### Common Issues
 
-1. **Microphone Access**: Ensure your system allows microphone access
-2. **Audio Drivers**: Install proper audio drivers for your system
-3. **API Keys**: Verify all API keys are correctly set in `.env`
-4. **Dependencies**: Make sure all Python packages are installed
+**Wake Word Not Working:**
+- Check `PORCUPINE_ACCESS_KEY` is set correctly
+- Ensure microphone permissions are granted
+- Try speaking clearly: "hey computer" or "hey assistant"
+
+**No Audio Output:**
+- Check system audio settings
+- Verify microphone/speaker permissions
+- Test with `python livekit.py console` first
+
+**Connection Issues:**
+- Verify LiveKit credentials if using cloud features
+- Check network connectivity
+- Try local mode first: `python livekit.py console`
 
 ### Debug Mode
-Enable debug logging by modifying the logging level:
-
 ```python
 logging.basicConfig(level=logging.DEBUG)
 ```
 
-### Testing Audio
-Test your microphone setup:
+### Testing Components
+```bash
+# Test microphone
+python -c "import sounddevice as sd; print(sd.query_devices())"
 
-```python
-import sounddevice as sd
-print(sd.query_devices())  # List available audio devices
+# Test wake word detection
+python -c "import pvporcupine; print('Porcupine available')"
+
+# Test OpenAI connection
+python -c "from openai import OpenAI; print('OpenAI available')"
 ```
 
-## Extending the Agent
+## 🎨 Customization Examples
 
-### Adding Custom Commands
-You can extend the agent to handle specific commands:
-
+### Personality Customization
 ```python
-async def handle_custom_command(self, text: str) -> str:
-    if "time" in text.lower():
-        import datetime
-        return f"The current time is {datetime.datetime.now().strftime('%H:%M')}"
-    return None
+class FriendlyAssistant(Agent):
+    def __init__(self):
+        super().__init__(
+            instructions="You are a friendly, enthusiastic assistant who loves helping people. Use a warm, conversational tone and ask follow-up questions to be more helpful."
+        )
 ```
 
-### Integration with External APIs
-Add weather, news, or other API integrations:
-
+### Domain-Specific Agent
 ```python
-async def get_weather(self, location: str) -> str:
-    # Integrate with weather API
-    pass
+class MedicalAssistant(Agent):
+    def __init__(self):
+        super().__init__(
+            instructions="You are a medical assistant. Always remind users to consult healthcare professionals for medical advice."
+        )
+    
+    @function_tool
+    async def schedule_appointment(self, date: str, time: str) -> str:
+        """Schedule a medical appointment."""
+        # Integration with calendar system
+        return f"Appointment scheduled for {date} at {time}"
 ```
 
-### Custom Wake Words
-Create custom wake words using Picovoice Console and add them to the `wake_words/` directory.
+## 📈 Performance Optimization
 
-## Performance Optimization
+- **Realtime API**: Lowest latency (~200ms)
+- **STT-LLM-TTS**: Higher latency but more customizable
+- **Local Models**: Use for privacy-sensitive applications
+- **Caching**: Implement response caching for common queries
 
-- **Audio Quality**: Adjust sample rate and chunk size for your needs
-- **Response Time**: Use faster OpenAI models (gpt-3.5-turbo vs gpt-4)
-- **Memory Usage**: Implement audio buffer management for long sessions
-- **Network**: Use local LiveKit server for reduced latency
+## 📝 License & Credits
 
-## License
+- **LiveKit**: Apache 2.0 License
+- **OpenAI**: Commercial API usage
+- **Porcupine**: Free tier available
+- **Framework**: Open source and extensible
 
-This project uses various third-party services and libraries. Please check their respective licenses:
-- OpenAI API: [OpenAI Terms](https://openai.com/terms/)
-- Porcupine: [Picovoice License](https://picovoice.ai/docs/quick-start/porcupine-python/)
-- LiveKit: [Apache 2.0 License](https://github.com/livekit/livekit) 
+Built with ❤️ using the LiveKit Agents Framework. 
