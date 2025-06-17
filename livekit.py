@@ -59,6 +59,7 @@ class VoiceAgentContext:
         self.session = None
         self.wake_word_detected = False
         self.conversation_active = False
+        self.deactivation_timer = None  # Track current timer task
         
     def has_wake_word_capability(self) -> bool:
         """Check if wake word detection is available."""
@@ -83,6 +84,7 @@ class VoiceAgentContext:
         """Deactivate conversation mode."""
         self.wake_word_detected = False
         self.conversation_active = False
+        self.cancel_deactivation_timer()  # Cancel any pending timer
         logger.info("Conversation deactivated")
     
     async def start_wake_word_detection(self):
@@ -159,6 +161,9 @@ class VoiceAgentContext:
         """Stop wake word detection and cleanup resources."""
         self.is_monitoring = False
         
+        # Cancel any pending deactivation timer
+        self.cancel_deactivation_timer()
+        
         if self.wake_word_thread:
             self.wake_word_thread.join(timeout=2)
         
@@ -171,6 +176,35 @@ class VoiceAgentContext:
             self.recorder = None
         
         logger.info("Wake word detection stopped")
+    
+    def cancel_deactivation_timer(self):
+        """Cancel any pending deactivation timer."""
+        if self.deactivation_timer and not self.deactivation_timer.done():
+            self.deactivation_timer.cancel()
+            logger.debug("Deactivation timer cancelled")
+    
+    def start_deactivation_timer(self, delay: int = 10):
+        """Start/restart the conversation deactivation timer."""
+        if not self.has_wake_word_capability():
+            return  # No timer needed for always-on mode
+            
+        # Cancel any existing timer
+        self.cancel_deactivation_timer()
+        
+        # Start new timer
+        self.deactivation_timer = asyncio.create_task(self._deactivate_after_delay(delay))
+        logger.debug(f"Deactivation timer started ({delay}s)")
+    
+    async def _deactivate_after_delay(self, delay: int):
+        """Deactivate conversation after delay."""
+        try:
+            await asyncio.sleep(delay)
+            if self.conversation_active:
+                self.deactivate_conversation()
+                logger.info("Conversation deactivated due to inactivity")
+        except asyncio.CancelledError:
+            logger.debug("Deactivation timer was cancelled")
+            raise
     
     # Function tools for the assistant
     def get_current_time(self) -> str:
@@ -242,6 +276,9 @@ async def entrypoint(ctx: JobContext):
         
         logger.info(f"User said: {msg.content}")
         
+        # Cancel any pending deactivation timer - user is actively engaged
+        agent_ctx.cancel_deactivation_timer()
+        
         # Check if we should respond
         if agent_ctx.should_respond_to_speech():
             handle_user_message(msg)
@@ -253,17 +290,11 @@ async def entrypoint(ctx: JobContext):
         """Handle agent speech completion."""
         logger.info(f"Assistant said: {msg.content}")
         
-        # For wake word mode, deactivate after responding
+        # For wake word mode, start/restart deactivation timer after agent speaks
         if agent_ctx.has_wake_word_capability():
-            # Set a timer to deactivate conversation after a period of silence
-            asyncio.create_task(deactivate_after_delay())
+            agent_ctx.start_deactivation_timer(delay=10)
     
-    async def deactivate_after_delay():
-        """Deactivate conversation after a delay."""
-        await asyncio.sleep(10)  # Wait 10 seconds
-        if agent_ctx.conversation_active:
-            agent_ctx.deactivate_conversation()
-            logger.info("Conversation deactivated due to inactivity")
+
     
     def handle_user_message(msg: llm.ChatMessage):
         """Process user message and generate response."""
