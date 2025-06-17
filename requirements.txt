@@ -1,0 +1,12 @@
+python-dotenv
+pvporcupine==3.0.5
+pvrecorder==1.2.7
+livekit
+livekit-agents
+openai
+asyncio
+aiohttp
+websockets
+numpy
+sounddevice
+soundfile
