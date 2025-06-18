@@ -5,7 +5,7 @@ import os
 
 load_dotenv()
 
-access_key = os.getenv("ACCESS_KEY")
+access_key = os.getenv("PORCUPINE_ACCESS_KEY")
 keywords = os.getenv("KEYWORDS")
 
 # for keyword in pvporcupine.KEYWORDS:
