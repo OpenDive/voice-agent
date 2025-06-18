@@ -45,6 +45,10 @@ class StateManager:
         self.current_emotion = "waiting"  # Track current emotional state
         self.emotion_history = []  # Log emotional journey
         self.ending_conversation = False  # Flag to prevent timer conflicts during goodbye
+        self.virtual_request_queue = []  # Queue for virtual coffee requests
+        self.announcing_virtual_request = False  # Flag to prevent conflicts during announcements
+        self.recent_greetings = []  # Track recent greetings to avoid repetition
+        self.interaction_count = 0  # Track number of interactions for familiarity
 
     async def transition_to_state(self, new_state: AgentState):
         """Handle state transitions with proper cleanup"""
@@ -104,8 +108,20 @@ class StateManager:
     async def _wait_for_user_response(self):
         """Wait for user response after agent speaks"""
         try:
-            # Wait for user to respond
-            await asyncio.sleep(USER_RESPONSE_TIMEOUT)
+            # Wait for user to respond, but check for virtual requests during pause
+            pause_duration = 0
+            check_interval = 2  # Check every 2 seconds
+            
+            while pause_duration < USER_RESPONSE_TIMEOUT:
+                await asyncio.sleep(check_interval)
+                pause_duration += check_interval
+                
+                # Check for virtual requests during the pause
+                if self.virtual_request_queue and not self.announcing_virtual_request:
+                    # Process virtual request during conversation pause
+                    await self._process_virtual_request_during_conversation()
+                    # Reset pause duration after announcement
+                    pause_duration = 0
             
             if self.session and self.current_state == AgentState.ACTIVE:
                 # Polite prompt with curious emotion
@@ -267,7 +283,103 @@ class StateManager:
         logger.info("🔍 DEBUG: end_conversation called - cleaning up and transitioning to dormant")
         await self.destroy_session()
         await self.transition_to_state(AgentState.DORMANT)
+        
+        # Process any queued virtual requests when conversation ends
+        await self._process_queued_virtual_requests()
+        
         logger.info("🔍 DEBUG: end_conversation completed - now in dormant state")
+
+    def queue_virtual_request(self, request_type: str, content: str, priority: str = "normal"):
+        """Add a virtual request to the queue"""
+        request = {
+            "type": request_type,
+            "content": content,
+            "priority": priority,
+            "timestamp": datetime.now()
+        }
+        
+        # Insert based on priority (urgent requests go to front)
+        if priority == "urgent":
+            self.virtual_request_queue.insert(0, request)
+        else:
+            self.virtual_request_queue.append(request)
+            
+        logger.info(f"📋 Queued virtual request: {request_type} - {content} (priority: {priority})")
+
+    async def _process_virtual_request_during_conversation(self):
+        """Process a virtual request during conversation pause"""
+        if not self.virtual_request_queue or self.announcing_virtual_request:
+            return
+            
+        self.announcing_virtual_request = True
+        
+        try:
+            request = self.virtual_request_queue.pop(0)
+            
+            # Brief polite interruption
+            excuse_msg = "excuse:Oh, excuse me one moment..."
+            emotion, text = self.process_emotional_response(excuse_msg)
+            await self.say_with_emotion(text, emotion)
+            
+            await asyncio.sleep(1)
+            
+            # Announce the virtual request
+            announcement = self._format_virtual_request_announcement(request)
+            emotion, text = self.process_emotional_response(announcement)
+            await self.say_with_emotion(text, emotion)
+            
+            await asyncio.sleep(1)
+            
+            # Resume conversation
+            resume_msg = "friendly:Now, where were we?"
+            emotion, text = self.process_emotional_response(resume_msg)
+            await self.say_with_emotion(text, emotion)
+            
+            logger.info(f"📢 Announced virtual request during conversation: {request['type']}")
+            
+        except Exception as e:
+            logger.error(f"Error processing virtual request during conversation: {e}")
+        finally:
+            self.announcing_virtual_request = False
+
+    async def _process_queued_virtual_requests(self):
+        """Process all queued virtual requests when in dormant state"""
+        while self.virtual_request_queue and self.current_state == AgentState.DORMANT:
+            try:
+                request = self.virtual_request_queue.pop(0)
+                
+                # Create temporary session for announcement
+                if not self.session:
+                    temp_session = await self.create_session(self.agent)
+                
+                # Announce the virtual request
+                announcement = self._format_virtual_request_announcement(request)
+                emotion, text = self.process_emotional_response(announcement)
+                await self.say_with_emotion(text, emotion)
+                
+                await asyncio.sleep(2)
+                
+                # Clean up temporary session
+                await self.destroy_session()
+                
+                logger.info(f"📢 Announced queued virtual request: {request['type']}")
+                
+            except Exception as e:
+                logger.error(f"Error processing queued virtual request: {e}")
+
+    def _format_virtual_request_announcement(self, request: dict) -> str:
+        """Format virtual request as emotional announcement"""
+        request_type = request["type"]
+        content = request["content"]
+        
+        if request_type == "NEW_COFFEE_REQUEST":
+            return f"excited:New order alert! We have a {content} request coming in!"
+        elif request_type == "ORDER_READY":
+            return f"professional:Order ready for pickup: {content}!"
+        elif request_type == "CUSTOMER_WAITING":
+            return f"helpful:Customer notification: {content}"
+        else:
+            return f"friendly:Update: {content}"
 
     def process_emotional_response(self, llm_response: str) -> tuple[str, str]:
         """Process LLM response and extract emotion + text from delimiter format (emotion:text)"""
@@ -298,7 +410,7 @@ class StateManager:
             valid_emotions = {
                 "excited", "helpful", "friendly", "curious", "empathetic", 
                 "sleepy", "waiting", "confused", "proud", "playful", 
-                "focused", "surprised", "enthusiastic", "warm", "professional", "cheerful"
+                "focused", "surprised", "enthusiastic", "warm", "professional", "cheerful", "excuse"
             }
             
             if emotion not in valid_emotions:
@@ -338,7 +450,8 @@ class StateManager:
             "proud": "😌 PROUD: Eyes slightly narrowed with satisfaction, confident gaze, subtle sparkle effect",
             "playful": "😄 PLAYFUL: Bright, animated eyes, quick winks, eyebrows dancing, mischievous glint",
             "focused": "🎯 FOCUSED: Intense stare, minimal blinking, laser-focused pupils, determined expression",
-            "surprised": "😲 SURPRISED: Eyes suddenly wide, rapid blinking, eyebrows shot up, pupils contracted"
+            "surprised": "😲 SURPRISED: Eyes suddenly wide, rapid blinking, eyebrows shot up, pupils contracted",
+            "excuse": "😅 EXCUSE: Apologetic gaze, slight head tilt, gentle blinking, eyebrows raised politely"
         }
         
         animation_desc = eye_animations.get(emotion, "😐 NEUTRAL: Standard eye animation")
@@ -571,6 +684,27 @@ class CoffeeBaristaAgent(Agent):
         recommendation = recommendations.get(preference.lower(), recommendations["default"])
         logger.info(f"Drink recommendation for '{preference}': {recommendation}")
         return recommendation
+
+    @function_tool()
+    async def receive_virtual_request(
+        self,
+        context: RunContext,
+        request_type: str,
+        content: str,
+        priority: str = "normal"
+    ) -> str:
+        """Process virtual coffee requests from external systems.
+        
+        Args:
+            request_type: Type of request (NEW_COFFEE_REQUEST, ORDER_READY, CUSTOMER_WAITING, etc.)
+            content: The content of the request (e.g., "Vanilla Latte", "Order #123")
+            priority: Priority level (normal, urgent, low) - defaults to normal
+        """
+        # Queue the virtual request
+        self.state_manager.queue_virtual_request(request_type, content, priority)
+        
+        # Return confirmation
+        return f"Virtual request received: {request_type} - {content} (priority: {priority})"
 
     async def start_wake_word_detection(self, room):
         """Start wake word detection in a separate thread"""
