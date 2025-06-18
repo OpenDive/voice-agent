@@ -473,6 +473,28 @@ class StateManager:
         else:
             logger.error("🔍 DEBUG: No session available for speaking")
 
+    def get_random_greeting(self) -> str:
+        """Get a random greeting from the greeting pool"""
+        import random
+        
+        greeting_pool = [
+            "excited:Hey there! Welcome to the Sui Hub Grand Opening in Athens! I'm your friendly robot barista. How can I help you today?",
+            "friendly:Hello! I'm your coffee barista robot at the Sui Hub Grand Opening! Ready to help with coffee orders and questions. How can I help you today?",
+            "enthusiastic:Welcome to our amazing blockchain coffee experience! I'm here to help with all your coffee needs!",
+            "cheerful:Great to see you! What's your coffee mission today?",
+            "warm:Welcome to our coffee command center! How can I caffeinate your conference experience?",
+            "professional:Welcome to the Sui Hub! I'm your dedicated blockchain barista bot. Ready to serve up some amazing coffee!",
+            "curious:Hello! Ready for some blockchain brewing magic? What sounds good?",
+            "playful:Hey there! Time for some coffee adventure! What can I create for you?",
+            "helpful:Welcome! Perfect timing for a coffee break. How can I help fuel your day?",
+            "friendly:Hi! Welcome back to our bustling coffee hub! What's brewing on your mind?"
+        ]
+        
+        selected_greeting = random.choice(greeting_pool)
+        logger.info(f"🎭 Selected random greeting: {selected_greeting[:50]}...")
+        
+        return selected_greeting
+
 # System instructions for the coffee barista robot
 BARISTA_INSTRUCTIONS = """You are a friendly coffee barista robot at the Sui Hub Grand Opening in Athens, Greece.
 Your bosses are John and George. 
@@ -792,8 +814,8 @@ class CoffeeBaristaAgent(Agent):
             # Transition to active state
             await self.state_manager.transition_to_state(AgentState.ACTIVE)
             
-            # Greet the user with delimiter format
-            greeting = "excited:Hey there! Welcome to the Sui Hub Grand Opening in Athens! I'm your friendly robot barista. How can I help you today?"
+            # Get random greeting from pool
+            greeting = self.state_manager.get_random_greeting()
             
             logger.info("🔍 DEBUG: About to call process_emotional_response and say_with_emotion (MANUAL TTS)")
             # Process the emotional response
@@ -854,8 +876,8 @@ async def entrypoint(ctx: JobContext):
         session = await agent.state_manager.create_session(agent)
         await agent.state_manager.transition_to_state(AgentState.ACTIVE)
         
-        # Always-on greeting with delimiter format
-        greeting = "friendly:Hello! I'm your coffee barista robot at the Sui Hub Grand Opening in Athens! Ready to help with coffee orders and questions. How can I help you today?"
+        # Get random greeting for always-on mode
+        greeting = agent.state_manager.get_random_greeting()
         
         logger.info("🔍 DEBUG: About to call process_emotional_response and say_with_emotion (ALWAYS-ON MANUAL TTS)")
         # Process the emotional response
