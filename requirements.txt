@@ -1,3 +1,5 @@
+setuptools
+typeguard
 python-dotenv
 pvporcupine==3.0.5
 pvrecorder==1.2.7
