@@ -44,6 +44,7 @@ class StateManager:
         self.agent = agent
         self.current_emotion = "waiting"  # Track current emotional state
         self.emotion_history = []  # Log emotional journey
+        self.ending_conversation = False  # Flag to prevent timer conflicts during goodbye
 
     async def transition_to_state(self, new_state: AgentState):
         """Handle state transitions with proper cleanup"""
@@ -66,6 +67,8 @@ class StateManager:
             if self.user_response_timer:
                 self.user_response_timer.cancel()
                 self.user_response_timer = None
+            # Reset conversation ending flag
+            self.ending_conversation = False
 
     async def _enter_new_state(self):
         """Initialize new state"""
@@ -84,6 +87,9 @@ class StateManager:
             await asyncio.sleep(MAX_CONVERSATION_TIME)  # 5 minute absolute limit
             if self.session and self.current_state == AgentState.ACTIVE:
                 logger.info("Maximum conversation time reached - ending session")
+                
+                # Set ending flag to prevent timer conflicts
+                self.ending_conversation = True
                 
                 # Timeout message with sleepy emotion
                 timeout_json = {
@@ -119,6 +125,9 @@ class StateManager:
                 await asyncio.sleep(FINAL_TIMEOUT)
                 
                 if self.session and self.current_state == AgentState.ACTIVE:
+                    # Set ending flag to prevent timer conflicts
+                    self.ending_conversation = True
+                    
                     # End conversation with friendly emotion
                     goodbye_json = {
                         "emotion": "friendly",
@@ -152,48 +161,99 @@ class StateManager:
             vad=silero.VAD.load(),
         )
         
-        # Set up session event handlers
-        @self.session.on("user_speech_committed")
-        def on_user_speech(msg):
-            """Handle user speech - cancel user response timer and check for conversation ending"""
-            async def handle_user_speech():
-                # Cancel user response timer when user speaks
-                if self.user_response_timer:
-                    self.user_response_timer.cancel()
-                    self.user_response_timer = None
-                
-                # Check if user said goodbye or similar
-                if hasattr(msg, 'text'):
-                    text_lower = msg.text.lower()
-                    if any(word in text_lower for word in ['goodbye', 'thanks', 'that\'s all', 'see you', 'bye']):
-                        logger.info("User indicated conversation ending")
-                        await asyncio.sleep(1)  # Brief pause
-                        await self.end_conversation()
-            asyncio.create_task(handle_user_speech())
+        # Set up session event handlers using correct LiveKit 1.0+ events
+        @self.session.on("conversation_item_added")
+        def on_conversation_item_added(event):
+            """Handle conversation items being added - detect user goodbye and manage conversation flow"""
+            logger.info("🔍 DEBUG: conversation_item_added event fired!")
+            logger.info(f"🔍 DEBUG: event type: {type(event)}")
+            logger.info(f"🔍 DEBUG: item role: {event.item.role}")
+            logger.info(f"🔍 DEBUG: item text: {event.item.text_content}")
             
-        @self.session.on("agent_speech_committed") 
-        def on_agent_speech(msg):
-            """Handle agent speech completion - start user response timer and process emotions"""
-            async def handle_agent_speech():
-                # Process emotional response if available
-                if hasattr(msg, 'text') and msg.text:
-                    # Check if this is a JSON response with emotion
-                    try:
-                        response_data = json.loads(msg.text)
-                        if 'emotion' in response_data:
-                            emotion = response_data['emotion']
-                            logger.info(f"🎭 Agent spoke with emotion: {emotion}")
-                            self.log_animated_eyes(emotion)
-                    except:
-                        pass  # Not JSON, just regular text
-                
-                # Start timer to wait for user response after agent finishes speaking
-                if self.user_response_timer:
-                    self.user_response_timer.cancel()
-                self.user_response_timer = asyncio.create_task(self._wait_for_user_response())
-            asyncio.create_task(handle_agent_speech())
+            async def handle_conversation_item():
+                try:
+                    # Handle user messages for goodbye detection
+                    if event.item.role == "user":
+                        # Cancel user response timer when user speaks
+                        if self.user_response_timer:
+                            self.user_response_timer.cancel()
+                            self.user_response_timer = None
+                        
+                        # Check for goodbye in user text
+                        user_text = event.item.text_content or ""
+                        text_lower = user_text.lower()
+                        logger.info(f"🔍 DEBUG: User said: '{user_text}'")
+                        
+                        goodbye_words = ['goodbye', 'thanks', 'that\'s all', 'see you', 'bye']
+                        
+                        if any(word in text_lower for word in goodbye_words):
+                            logger.info("🔍 DEBUG: User indicated conversation ending - goodbye detected!")
+                            # Set ending flag to prevent timer conflicts
+                            self.ending_conversation = True
+                            await asyncio.sleep(1)  # Brief pause
+                            await self.end_conversation()
+                        else:
+                            logger.info(f"🔍 DEBUG: No goodbye detected in: '{user_text}'")
+                    
+                    # Handle agent messages for timer management
+                    elif event.item.role == "assistant":
+                        logger.info("🔍 DEBUG: Agent message added to conversation")
+                        
+                        # Only start new timer if we're not ending the conversation
+                        if not self.ending_conversation:
+                            # Start timer to wait for user response after agent speaks
+                            if self.user_response_timer:
+                                self.user_response_timer.cancel()
+                            
+                            self.user_response_timer = asyncio.create_task(self._wait_for_user_response())
+                            logger.info("🔍 DEBUG: Started user response timer")
+                        else:
+                            logger.info("🔍 DEBUG: Skipping user response timer - conversation ending")
+                            
+                except Exception as e:
+                    logger.error(f"🔍 DEBUG: Exception in conversation_item_added handler: {e}")
+                    import traceback
+                    logger.error(f"🔍 DEBUG: Traceback: {traceback.format_exc()}")
+                    
+            asyncio.create_task(handle_conversation_item())
+        
+        @self.session.on("user_state_changed")
+        def on_user_state_changed(event):
+            """Handle user state changes (speaking/listening)"""
+            logger.info(f"🔍 DEBUG: user_state_changed: {event.old_state} → {event.new_state}")
+            
+            if event.new_state == "speaking":
+                logger.info("🔍 DEBUG: User started speaking")
+            elif event.new_state == "listening":
+                logger.info("🔍 DEBUG: User stopped speaking")
+        
+        @self.session.on("agent_state_changed")
+        def on_agent_state_changed(event):
+            """Handle agent state changes (initializing/listening/thinking/speaking)"""
+            logger.info(f"🔍 DEBUG: agent_state_changed: {event.old_state} → {event.new_state}")
+            
+            if event.new_state == "speaking":
+                logger.info("🔍 DEBUG: Agent started speaking")
+            elif event.new_state == "listening":
+                logger.info("🔍 DEBUG: Agent is listening")
+            elif event.new_state == "thinking":
+                logger.info("🔍 DEBUG: Agent is thinking")
+        
+        @self.session.on("close")
+        def on_session_close(event):
+            """Handle session close events"""
+            logger.info("🔍 DEBUG: session close event fired!")
+            if event.error:
+                logger.error(f"🔍 DEBUG: Session closed with error: {event.error}")
+            else:
+                logger.info("🔍 DEBUG: Session closed normally")
         
         await self.session.start(agent=agent, room=self.ctx.room)
+        
+        # Debug session after creation
+        logger.info(f"🔍 DEBUG: Session created: {self.session}")
+        logger.info(f"🔍 DEBUG: Session type: {type(self.session)}")
+        
         return self.session
 
     async def destroy_session(self):
@@ -208,8 +268,10 @@ class StateManager:
 
     async def end_conversation(self):
         """End the current conversation and return to dormant state"""
+        logger.info("🔍 DEBUG: end_conversation called - cleaning up and transitioning to dormant")
         await self.destroy_session()
         await self.transition_to_state(AgentState.DORMANT)
+        logger.info("🔍 DEBUG: end_conversation completed - now in dormant state")
 
     def process_emotional_response(self, llm_response: str) -> tuple[str, str]:
         """Process LLM response and extract emotion + text from delimiter format (emotion:text)"""
@@ -373,7 +435,7 @@ class CoffeeBaristaAgent(Agent):
                 if not text_chunk:
                     continue
                     
-                logger.info(f"🔍 DEBUG: TTS processing text chunk: {repr(text_chunk)}")
+                # logger.info(f"🔍 DEBUG: TTS processing text chunk: {repr(text_chunk)}")
                 buffer += text_chunk
                 
                 # Check if we haven't extracted emotion yet and have a delimiter
@@ -406,7 +468,7 @@ class CoffeeBaristaAgent(Agent):
                     
                 elif emotion_extracted:
                     # We've already extracted emotion, stream the rest as text
-                    logger.info(f"💬 TTS streaming: {repr(text_chunk)}")
+                    # logger.info(f"💬 TTS streaming: {repr(text_chunk)}")
                     yield text_chunk
                     
                 # If no delimiter found yet, don't yield anything (waiting for emotion:text format)
@@ -546,7 +608,7 @@ class CoffeeBaristaAgent(Agent):
             
         except Exception as e:
             logger.error(f"Failed to start wake word detection: {e}")
-            
+    
     def _wake_word_detection_loop(self, room):
         """Wake word detection loop running in separate thread"""
         try:
@@ -575,7 +637,7 @@ class CoffeeBaristaAgent(Agent):
         finally:
             if self.recorder:
                 self.recorder.stop()
-                
+    
     async def activate_conversation(self, room):
         """Activate conversation when wake word is detected"""
         logger.info("🔍 DEBUG: activate_conversation called")
@@ -606,7 +668,7 @@ class CoffeeBaristaAgent(Agent):
             emotion, text = self.state_manager.process_emotional_response(greeting)
             await self.state_manager.say_with_emotion(text, emotion)
             logger.info("🔍 DEBUG: Manual TTS call completed")
-            
+                
         except Exception as e:
             logger.error(f"Error activating conversation: {e}")
             # Return to dormant state on error
@@ -633,7 +695,7 @@ class CoffeeBaristaAgent(Agent):
                 self.porcupine.delete()
             except:
                 pass
-                
+        
         logger.info("Wake word detection stopped")
 
 async def entrypoint(ctx: JobContext):
