@@ -556,74 +556,87 @@ class CoffeeBaristaAgent(Agent):
         self.event_loop = None
         
     async def tts_node(self, text, model_settings=None):
-        """Override TTS node to process delimiter-based responses (emotion:text) and extract text for TTS"""
-        logger.info("🔍 DEBUG: tts_node called - processing delimiter-based text for TTS")
+        """Override TTS node to process delimiter-based responses (emotion:text) with minimal buffering"""
+        logger.info("🔍 DEBUG: tts_node called - processing delimiter-based text with minimal buffering")
         
-        # Process text stream and extract emotion
+        # Process text stream with minimal buffering for emotion extraction
         async def process_text_stream():
-            buffer = ""
+            first_chunk_buffer = ""
             emotion_extracted = False
+            emotion_check_limit = 50  # Only check first 50 characters for emotion delimiter
+            chunks_processed = 0
             
             async for text_chunk in text:
                 if not text_chunk:
                     continue
-                    
-                # logger.info(f"🔍 DEBUG: TTS processing text chunk: {repr(text_chunk)}")
-                buffer += text_chunk
                 
-                # Check if we haven't extracted emotion yet and have a delimiter
-                if not emotion_extracted and ":" in buffer:
-                    logger.info("🔍 DEBUG: Found delimiter in TTS! Extracting emotion...")
+                chunks_processed += 1
+                
+                # Only buffer and check for emotion in the very first chunk(s)
+                if not emotion_extracted and len(first_chunk_buffer) < emotion_check_limit:
+                    first_chunk_buffer += text_chunk
                     
-                    # Split on first colon
-                    parts = buffer.split(":", 1)
-                    emotion = parts[0].strip()
-                    text_after_delimiter = parts[1] if len(parts) > 1 else ""
+                    # Check if we have delimiter in the buffered portion
+                    if ":" in first_chunk_buffer:
+                        logger.info("🔍 DEBUG: Found delimiter in first chunk(s)! Extracting emotion...")
+                        
+                        # Split on first colon
+                        parts = first_chunk_buffer.split(":", 1)
+                        emotion = parts[0].strip()
+                        text_after_delimiter = parts[1] if len(parts) > 1 else ""
+                        
+                        logger.info(f"🔍 DEBUG: Extracted emotion: '{emotion}'")
+                        logger.info(f"🔍 DEBUG: Text after delimiter: '{text_after_delimiter[:30]}{'...' if len(text_after_delimiter) > 30 else ''}'")
+                        
+                        # Validate and process the emotion
+                        valid_emotions = {
+                            "excited", "helpful", "friendly", "curious", "empathetic", 
+                            "sleepy", "waiting", "confused", "proud", "playful", 
+                            "focused", "surprised", "enthusiastic", "warm", "professional", "cheerful", "excuse"
+                        }
+                        
+                        if emotion in valid_emotions:
+                            if emotion != self.state_manager.current_emotion:
+                                logger.info(f"🎭 Emotion transition: {self.state_manager.current_emotion} → {emotion}")
+                                self.state_manager.log_animated_eyes(emotion)
+                                self.state_manager.current_emotion = emotion
+                            
+                            logger.info(f"🎭 Agent speaking with emotion: {emotion}")
+                        else:
+                            logger.warning(f"Invalid emotion '{emotion}', keeping current emotion")
+                        
+                        # Mark emotion as extracted
+                        emotion_extracted = True
+                        
+                        # Immediately yield the text part (no more buffering)
+                        if text_after_delimiter.strip():
+                            logger.info(f"💬 TTS streaming text immediately: {text_after_delimiter[:30]}{'...' if len(text_after_delimiter) > 30 else ''}")
+                            yield text_after_delimiter
+                        
+                    elif len(first_chunk_buffer) >= emotion_check_limit:
+                        # Reached limit without finding delimiter - give up and stream everything
+                        logger.info("🔍 DEBUG: No delimiter found within limit, streaming everything with default emotion")
+                        
+                        # Use default emotion
+                        emotion = "friendly"
+                        if emotion != self.state_manager.current_emotion:
+                            logger.info(f"🎭 Using fallback emotion: {emotion}")
+                            self.state_manager.log_animated_eyes(emotion)
+                            self.state_manager.current_emotion = emotion
+                        
+                        emotion_extracted = True
+                        
+                        # Yield the buffered content immediately
+                        logger.info(f"💬 TTS fallback streaming: {first_chunk_buffer[:30]}{'...' if len(first_chunk_buffer) > 30 else ''}")
+                        yield first_chunk_buffer
                     
-                    logger.info(f"🔍 DEBUG: Extracted emotion: '{emotion}'")
-                    logger.info(f"🔍 DEBUG: Text after delimiter: '{text_after_delimiter[:50]}{'...' if len(text_after_delimiter) > 50 else ''}'")
+                    # If we haven't extracted emotion yet and haven't hit limit, continue buffering
+                    # (don't yield anything yet)
                     
-                    # Process the emotion
-                    if emotion != self.state_manager.current_emotion:
-                        logger.info(f"🎭 Emotion transition: {self.state_manager.current_emotion} → {emotion}")
-                        self.state_manager.log_animated_eyes(emotion)
-                        self.state_manager.current_emotion = emotion
-                    
-                    logger.info(f"🎭 Agent speaking with emotion: {emotion}")
-                    
-                    # Mark emotion as extracted
-                    emotion_extracted = True
-                    
-                    # Yield only the text part for TTS
-                    if text_after_delimiter.strip():
-                        logger.info(f"💬 TTS text: {text_after_delimiter[:50]}{'...' if len(text_after_delimiter) > 50 else ''}")
-                        yield text_after_delimiter
-                    
-                elif emotion_extracted:
-                    # We've already extracted emotion, stream the rest as text
-                    # logger.info(f"💬 TTS streaming: {repr(text_chunk)}")
+                else:
+                    # Either emotion already extracted, or we're past the check limit
+                    # Stream everything immediately
                     yield text_chunk
-                    
-                # If no delimiter found yet, don't yield anything (waiting for emotion:text format)
-            
-            # Handle case where no delimiter was found - treat entire response as text with default emotion
-            if not emotion_extracted and buffer.strip():
-                logger.warning("🔍 DEBUG: No delimiter found in TTS, using fallback")
-                logger.warning(f"🔍 DEBUG: Complete text: '{buffer}'")
-                
-                # Use default emotion
-                emotion = "friendly"
-                logger.info(f"🎭 Using fallback emotion: {emotion}")
-                
-                # Process emotion
-                if emotion != self.state_manager.current_emotion:
-                    logger.info(f"🎭 Emotion transition: {self.state_manager.current_emotion} → {emotion}")
-                    self.state_manager.log_animated_eyes(emotion)
-                    self.state_manager.current_emotion = emotion
-                
-                # Yield the entire buffer as text
-                logger.info(f"💬 Fallback TTS text: {buffer[:100]}{'...' if len(buffer) > 100 else ''}")
-                yield buffer.strip()
         
         # Process the text stream and pass clean text to default TTS
         processed_text = process_text_stream()
