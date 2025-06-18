@@ -109,12 +109,9 @@ class StateManager:
             
             if self.session and self.current_state == AgentState.ACTIVE:
                 # Polite prompt with curious emotion
-                prompt_json = {
-                    "emotion": "curious",
-                    "text": "Is there anything else I can help you with?"
-                }
-                prompt_msg = json.dumps(prompt_json)
-                emotion, text = self.process_emotional_response(prompt_msg)
+
+                prompt = "curious:Is there anything else I can help you with?"
+                emotion, text = self.process_emotional_response(prompt)
                 await self.say_with_emotion(text, emotion)
                 
                 # Wait a bit more
