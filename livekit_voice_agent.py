@@ -91,13 +91,9 @@ class StateManager:
                 # Set ending flag to prevent timer conflicts
                 self.ending_conversation = True
                 
-                # Timeout message with sleepy emotion
-                timeout_json = {
-                    "emotion": "sleepy",
-                    "text": "We've been chatting for a while! I'm getting a bit sleepy. Thanks for the conversation. Say 'hey barista' if you need me again."
-                }
-                timeout_msg = json.dumps(timeout_json)
-                emotion, text = self.process_emotional_response(timeout_msg)
+                # Timeout message with sleepy emotion using delimiter format
+                timeout_response = "sleepy:We've been chatting for a while! I'm getting a bit sleepy. Thanks for the conversation. Say 'hey barista' if you need me again."
+                emotion, text = self.process_emotional_response(timeout_response)
                 await self.say_with_emotion(text, emotion)
                 
                 await asyncio.sleep(2)
@@ -128,13 +124,9 @@ class StateManager:
                     # Set ending flag to prevent timer conflicts
                     self.ending_conversation = True
                     
-                    # End conversation with friendly emotion
-                    goodbye_json = {
-                        "emotion": "friendly",
-                        "text": "Thanks for chatting! Say 'hey barista' if you need me again."
-                    }
-                    goodbye_msg = json.dumps(goodbye_json)
-                    emotion, text = self.process_emotional_response(goodbye_msg)
+                    # End conversation with friendly emotion using delimiter format
+                    goodbye_response = "friendly:Thanks for chatting! Say 'hey barista' if you need me again."
+                    emotion, text = self.process_emotional_response(goodbye_response)
                     await self.say_with_emotion(text, emotion)
                     
                     await asyncio.sleep(2)
@@ -190,7 +182,14 @@ class StateManager:
                             logger.info("🔍 DEBUG: User indicated conversation ending - goodbye detected!")
                             # Set ending flag to prevent timer conflicts
                             self.ending_conversation = True
-                            await asyncio.sleep(1)  # Brief pause
+                            
+                            # Let agent say goodbye before ending conversation
+                            goodbye_response = "friendly:Thanks for chatting! Say 'hey barista' if you need me again."
+                            emotion, text = self.process_emotional_response(goodbye_response)
+                            await self.say_with_emotion(text, emotion)
+                            
+                            # Wait for goodbye to finish, then end conversation
+                            await asyncio.sleep(3)  # Give time for TTS to complete
                             await self.end_conversation()
                         else:
                             logger.info(f"🔍 DEBUG: No goodbye detected in: '{user_text}'")
