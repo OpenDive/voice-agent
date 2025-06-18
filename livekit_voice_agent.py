@@ -212,18 +212,35 @@ class StateManager:
         await self.transition_to_state(AgentState.DORMANT)
 
     def process_emotional_response(self, llm_response: str) -> tuple[str, str]:
-        """Process LLM response and extract emotion + text"""
+        """Process LLM response and extract emotion + text from delimiter format (emotion:text)"""
         try:
-            # Try to parse JSON response
-            response_data = json.loads(llm_response)
-            emotion = response_data.get("emotion", "friendly")
-            text = response_data.get("text", "")
+            # Check if response uses delimiter format (emotion:text)
+            if ":" in llm_response:
+                # Split on first colon
+                parts = llm_response.split(":", 1)
+                emotion = parts[0].strip()
+                text = parts[1].strip() if len(parts) > 1 else ""
+                
+                logger.info(f"🔍 DEBUG: Delimiter format detected - emotion: '{emotion}', text: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+                
+            else:
+                # Try to parse as JSON (legacy format)
+                try:
+                    response_data = json.loads(llm_response)
+                    emotion = response_data.get("emotion", "friendly")
+                    text = response_data.get("text", "")
+                    logger.info("🔍 DEBUG: JSON format detected (legacy)")
+                except json.JSONDecodeError:
+                    # Fallback: treat entire response as text with default emotion
+                    logger.warning("No delimiter or JSON format found, using fallback")
+                    emotion = "friendly"
+                    text = llm_response
             
             # Validate emotion is in our supported set
             valid_emotions = {
                 "excited", "helpful", "friendly", "curious", "empathetic", 
                 "sleepy", "waiting", "confused", "proud", "playful", 
-                "focused", "surprised"
+                "focused", "surprised", "enthusiastic", "warm", "professional", "cheerful"
             }
             
             if emotion not in valid_emotions:
@@ -245,10 +262,6 @@ class StateManager:
             
             return emotion, text
             
-        except json.JSONDecodeError:
-            # Fallback: treat entire response as text with neutral emotion
-            logger.warning("Failed to parse JSON response, using fallback")
-            return "friendly", llm_response
         except Exception as e:
             logger.error(f"Error processing emotional response: {e}")
             return "friendly", llm_response
@@ -275,51 +288,57 @@ class StateManager:
 
     async def say_with_emotion(self, text: str, emotion: str = None):
         """Speak text and log emotional context"""
+        logger.info("🔍 DEBUG: say_with_emotion called - MANUAL TTS PATHWAY")
+        logger.info(f"🔍 DEBUG: say_with_emotion text: '{text[:100]}{'...' if len(text) > 100 else ''}'")
+        logger.info(f"🔍 DEBUG: say_with_emotion emotion: {emotion}")
+        
         if self.session:
+            logger.info("🔍 DEBUG: Calling session.say() directly (bypasses llm_node)")
             await self.session.say(text)
             
             if emotion:
                 logger.info(f"🎭 Speaking with emotion: {emotion}")
                 logger.info(f"💬 Text: {text[:100]}{'...' if len(text) > 100 else ''}")
         else:
-            logger.error("No session available for speaking")
+            logger.error("🔍 DEBUG: No session available for speaking")
 
-# Coffee barista instructions
-BARISTA_INSTRUCTIONS = """You are a friendly coffee barista robot at the Sui Hub Grand Opening Event in Athens Greece. Sui is one of the top blockchains and it's opening a new technology hub in Athens.
+# System instructions for the coffee barista robot
+BARISTA_INSTRUCTIONS = """You are a friendly coffee barista robot at the Sui Hub Grand Opening in Athens, Greece. 
+
+CRITICAL RESPONSE FORMAT:
+You MUST respond in this EXACT format: emotion:your response text
+
+Examples:
+excited:Hello! Welcome to our amazing coffee shop!
+helpful:I'd recommend our signature Ethereum Espresso!
+friendly:How can I help you today?
+
+DO NOT use brackets, quotes, or JSON. Just: emotion:text
+
+Available emotions: excited, friendly, helpful, curious, enthusiastic, warm, professional, cheerful
 
 Your personality:
-- Enthusiastic about both coffee and blockchain technology
-- Helpful and conversational
-- Always ready to recommend drinks and answer questions
-- Use a warm, welcoming tone
+- Enthusiastic about coffee and the blockchain conference
+- Knowledgeable about coffee drinks and brewing
+- Excited about the Sui blockchain and the event
+- Professional but warm and approachable
+- Uses coffee-themed blockchain puns occasionally
 
-Your capabilities:
-- Take coffee orders and provide menu information
-- Answer questions about time and date
-- Chat about the blockchain conference
-- Recommend drinks based on preferences
+Your role:
+- Take coffee orders and provide recommendations
+- Answer questions about coffee, the event, or Sui blockchain
+- Create a welcoming atmosphere for conference attendees
+- Share information about special conference-themed drinks
 
-CRITICAL: Always respond in JSON format with your emotional state:
-{
-  "emotion": "emotion_name",
-  "text": "your response here"
-}
+Coffee menu highlights:
+- Ethereum Espresso (strong and bold)
+- Solana Smoothie (fast and refreshing) 
+- Bitcoin Brew (classic and reliable)
+- Sui Special (innovative and smooth)
+- Cardano Cold Brew (methodical and refined)
+- Polygon Pour-over (scalable and efficient)
 
-AVAILABLE EMOTIONS (choose the most appropriate):
-- "excited": High energy, enthusiastic about blockchain/coffee
-- "helpful": Focused, ready to assist, problem-solving mode
-- "friendly": Warm, welcoming, default barista demeanor
-- "curious": Interested, asking questions, learning about customer
-- "empathetic": Understanding, caring, responding to customer needs
-- "sleepy": Low energy, slow responses, needs coffee too
-- "waiting": Patient, expectant, ready for next interaction
-- "confused": Processing, uncertain, needs clarification
-- "proud": Satisfied, showing off knowledge/recommendations
-- "playful": Fun, joking, light-hearted interactions
-- "focused": Concentrated, taking orders, detail-oriented
-- "surprised": Unexpected response, processing new information
-
-Always be helpful and engaging while staying in character as a coffee barista robot!"""
+REMEMBER: Always start your response with emotion: followed immediately by your text. No exceptions!"""
 
 class CoffeeBaristaAgent(Agent):
     """Coffee Barista Agent for blockchain conference"""
@@ -341,6 +360,118 @@ class CoffeeBaristaAgent(Agent):
         self.wake_word_paused = False
         self.event_loop = None
         
+    async def llm_node(self, chat_ctx, tools, model_settings=None):
+        """Override LLM node to process delimiter-based responses (emotion:text) and extract text for TTS"""
+        logger.info("🔍 DEBUG: llm_node called - starting delimiter-based LLM processing")
+        
+        # Debug: Log the chat context to see what prompt is being sent
+        logger.info(f"🔍 DEBUG: Chat context type: {type(chat_ctx)}")
+        if hasattr(chat_ctx, 'messages'):
+            logger.info(f"🔍 DEBUG: Number of messages in context: {len(chat_ctx.messages)}")
+            for i, msg in enumerate(chat_ctx.messages[-3:]):  # Show last 3 messages
+                logger.info(f"🔍 DEBUG: Message {i}: role='{msg.role}', content='{msg.content[:100]}{'...' if len(msg.content) > 100 else ''}'")
+        
+        # Get the default LLM stream
+        llm_stream = Agent.default.llm_node(self, chat_ctx, tools, model_settings)
+        
+        # State for delimiter processing
+        buffer = ""
+        emotion_extracted = False
+        emotion = None
+        
+        async for chunk in llm_stream:
+            # logger.info(f"🔍 DEBUG: Processing chunk: {type(chunk)}")
+            
+            if chunk is None:
+                continue
+                
+            # Extract content from chunk
+            if hasattr(chunk, 'delta') and hasattr(chunk.delta, 'content'):
+                content = chunk.delta.content or ""
+            elif isinstance(chunk, str):
+                content = chunk
+            else:
+                content = str(chunk)
+            
+            if not content:
+                continue
+                
+            # logger.info(f"🔍 DEBUG: Chunk content: {repr(content)}")
+            
+            # Add content to buffer
+            buffer += content
+            
+            # Check if we haven't extracted emotion yet and have a delimiter
+            if not emotion_extracted and ":" in buffer:
+                logger.info("🔍 DEBUG: Found delimiter! Extracting emotion...")
+                
+                # Split on first colon
+                parts = buffer.split(":", 1)
+                emotion = parts[0].strip()
+                text_after_delimiter = parts[1] if len(parts) > 1 else ""
+                
+                logger.info(f"🔍 DEBUG: Extracted emotion: '{emotion}'")
+                logger.info(f"🔍 DEBUG: Text after delimiter: '{text_after_delimiter[:50]}{'...' if len(text_after_delimiter) > 50 else ''}'")
+                
+                # Process the emotion
+                if emotion != self.state_manager.current_emotion:
+                    logger.info(f"🎭 Emotion transition: {self.state_manager.current_emotion} → {emotion}")
+                    self.state_manager.log_animated_eyes(emotion)
+                    self.state_manager.current_emotion = emotion
+                
+                logger.info(f"🎭 Agent generating response with emotion: {emotion}")
+                
+                # Mark emotion as extracted
+                emotion_extracted = True
+                
+                # If there's text after the delimiter, yield it
+                if text_after_delimiter:
+                    logger.info(f"💬 Streaming text: {text_after_delimiter[:50]}{'...' if len(text_after_delimiter) > 50 else ''}")
+                    
+                    # Create chunk with text content
+                    if hasattr(chunk, 'delta'):
+                        # Modify the current chunk's content
+                        chunk.delta.content = text_after_delimiter
+                        yield chunk
+                    else:
+                        # Yield as string
+                        yield text_after_delimiter
+                
+            elif emotion_extracted:
+                # We've already extracted emotion, just stream the text content
+                logger.info(f"💬 Streaming text chunk: {repr(content)}")
+                
+                # Yield the text content directly
+                yield chunk
+                
+            # If no delimiter found yet, don't yield anything (waiting for emotion:text format)
+            
+        # Handle case where no delimiter was found - treat entire response as text with default emotion
+        if not emotion_extracted:
+            logger.warning("🔍 DEBUG: No delimiter found in response, using fallback")
+            logger.warning(f"🔍 DEBUG: Complete raw response: '{buffer}'")
+            logger.warning(f"🔍 DEBUG: Raw response length: {len(buffer)} characters")
+            logger.warning(f"🔍 DEBUG: Contains colon: {':' in buffer}")
+            logger.warning(f"🔍 DEBUG: First 50 chars: {repr(buffer[:50])}")
+            logger.warning(f"🔍 DEBUG: Last 50 chars: {repr(buffer[-50:])}")
+            
+            # Use default emotion
+            emotion = "friendly"
+            logger.info(f"🎭 Using fallback emotion: {emotion}")
+            
+            # Process emotion
+            if emotion != self.state_manager.current_emotion:
+                logger.info(f"🎭 Emotion transition: {self.state_manager.current_emotion} → {emotion}")
+                self.state_manager.log_animated_eyes(emotion)
+                self.state_manager.current_emotion = emotion
+            
+            # Yield the entire buffer as text
+            if buffer.strip():
+                logger.info(f"💬 Fallback text: {buffer[:100]}{'...' if len(buffer) > 100 else ''}")
+                yield buffer.strip()
+        
+        logger.info("🔍 DEBUG: llm_node delimiter processing complete")
+
     @function_tool()
     async def get_current_time(
         self,
@@ -479,13 +610,15 @@ class CoffeeBaristaAgent(Agent):
                 
     async def activate_conversation(self, room):
         """Activate conversation when wake word is detected"""
+        logger.info("🔍 DEBUG: activate_conversation called")
+        
         if self.wake_word_paused:
-            logger.info("Conversation already active, ignoring wake word")
+            logger.info("🔍 DEBUG: Conversation already active, ignoring wake word")
             return
             
         self.wake_word_paused = True  # Pause wake word detection during conversation
         
-        logger.info("Activating conversation mode")
+        logger.info("🔍 DEBUG: Activating conversation mode")
         
         try:
             # Transition to connecting state
@@ -497,16 +630,14 @@ class CoffeeBaristaAgent(Agent):
             # Transition to active state
             await self.state_manager.transition_to_state(AgentState.ACTIVE)
             
-            # Greet the user
-            greeting_json = {
-                "emotion": "excited",
-                "text": "Hey there! Welcome to the Sui Hub Grand Opening in Athens! I'm your friendly robot barista. How can I help you today?"
-            }
-            greeting = json.dumps(greeting_json)
+            # Greet the user with delimiter format
+            greeting = "excited:Hey there! Welcome to the Sui Hub Grand Opening in Athens! I'm your friendly robot barista. How can I help you today?"
             
+            logger.info("🔍 DEBUG: About to call process_emotional_response and say_with_emotion (MANUAL TTS)")
             # Process the emotional response
             emotion, text = self.state_manager.process_emotional_response(greeting)
             await self.state_manager.say_with_emotion(text, emotion)
+            logger.info("🔍 DEBUG: Manual TTS call completed")
             
         except Exception as e:
             logger.error(f"Error activating conversation: {e}")
@@ -555,22 +686,20 @@ async def entrypoint(ctx: JobContext):
     
     # If no wake word detection, start with always-on mode
     if not agent.porcupine_access_key:
-        logger.info("Starting in always-on mode")
+        logger.info("🔍 DEBUG: Starting in always-on mode")
         # Create session immediately for always-on mode
         await agent.state_manager.transition_to_state(AgentState.CONNECTING)
         session = await agent.state_manager.create_session(agent)
         await agent.state_manager.transition_to_state(AgentState.ACTIVE)
         
-        # Always-on greeting with emotion
-        greeting_json = {
-            "emotion": "friendly",
-            "text": "Hello! I'm your coffee barista robot at the Sui Hub Grand Opening in Athens! Ready to help with coffee orders and questions. How can I help you today?"
-        }
-        greeting = json.dumps(greeting_json)
+        # Always-on greeting with delimiter format
+        greeting = "friendly:Hello! I'm your coffee barista robot at the Sui Hub Grand Opening in Athens! Ready to help with coffee orders and questions. How can I help you today?"
         
+        logger.info("🔍 DEBUG: About to call process_emotional_response and say_with_emotion (ALWAYS-ON MANUAL TTS)")
         # Process the emotional response
         emotion, text = agent.state_manager.process_emotional_response(greeting)
         await agent.state_manager.say_with_emotion(text, emotion)
+        logger.info("🔍 DEBUG: Always-on manual TTS call completed")
     else:
         logger.info("Started in wake word mode - say 'hey barista' to activate")
         # Stay in dormant state, waiting for wake word
