@@ -44,7 +44,67 @@ VOICE_AGENT_TEMPERATURE=0.7  # AI response creativity (0.0-1.0)
 VOICE_AGENT_VOICE=nova      # OpenAI voice: alloy, echo, fable, onyx, nova, shimmer
 ```
 
-### 3. Get API Keys
+### 3. Linux PipeWire Configuration (Required for Ubuntu/Linux)
+
+**If you're running on Ubuntu or other Linux distributions with PipeWire**, you need to configure low-latency audio processing to resolve LiveKit WebRTC stream delay errors:
+
+#### Create PipeWire Low-Latency Configuration
+
+```bash
+# Create the configuration directory
+mkdir -p ~/.config/pipewire/pipewire.conf.d
+
+# Create the low-latency configuration file
+cat > ~/.config/pipewire/pipewire.conf.d/10-low-latency.conf << 'EOF'
+context.properties = {
+    # Lower latency settings for real-time audio processing
+    # These settings help resolve LiveKit WebRTC stream delay errors
+    default.clock.min-quantum = 32
+    default.clock.max-quantum = 2048
+    default.clock.quantum = 512
+    
+    # Memory locking for real-time processes
+    mem.allow-mlock = true
+    mem.warn-mlock = false
+    
+    # Power of two quantum for efficiency
+    clock.power-of-two-quantum = true
+    
+    # Ensure proper real-time audio processing
+    link.max-buffers = 16
+}
+EOF
+
+# Restart PipeWire to apply the configuration
+systemctl --user restart pipewire pipewire-pulse
+```
+
+#### Verify Configuration
+
+```bash
+# Check that the settings were applied
+pw-metadata -n settings 0
+
+# You should see:
+# clock.quantum = 512
+# clock.min-quantum = 32
+# clock.max-quantum = 2048
+```
+
+#### Alternative: Runtime Configuration
+
+If you prefer to set the configuration at runtime without restarting PipeWire:
+
+```bash
+# Set low-latency settings dynamically
+pw-metadata -n settings 0 clock.min-quantum 32
+pw-metadata -n settings 0 clock.max-quantum 2048
+pw-metadata -n settings 0 clock.quantum 512
+```
+
+**Note**: This configuration is essential for Linux systems to resolve the "Failed to set stream delay" error that occurs with LiveKit's WebRTC audio processing module.
+
+### 4. Get API Keys
 
 #### 🔑 OpenAI API Key (Required)
 1. Sign up at [OpenAI Platform](https://platform.openai.com/)
@@ -61,13 +121,13 @@ VOICE_AGENT_VOICE=nova      # OpenAI voice: alloy, echo, fable, onyx, nova, shim
 2. Create a project
 3. Copy API Key and Secret
 
-### 4. Download Model Files
+### 5. Download Model Files
 
 ```bash
 python livekit.py download-files
 ```
 
-### 5. Run the Agent
+### 6. Run the Agent
 
 ```bash
 # Terminal mode (local testing)
@@ -327,6 +387,46 @@ LiveKit agents support horizontal scaling and load balancing.
 - Wake word detection runs in separate thread
 - If experiencing crashes, check for proper event loop handling
 
+### Linux-Specific Audio Issues
+
+**"Failed to set stream delay" Error (Linux/Ubuntu):**
+This is a common issue on Linux systems with PipeWire. The error occurs because LiveKit's WebRTC audio processing module expects specific real-time audio capabilities that aren't configured by default.
+
+**Symptoms:**
+```
+RuntimeError: an RtcError occured: Internal - Failed to set stream delay
+```
+
+**Solution:**
+1. **Apply PipeWire Low-Latency Configuration** (see step 3 in Quick Start)
+2. **Verify Configuration:**
+   ```bash
+   pw-metadata -n settings 0
+   # Should show: clock.quantum = 512, clock.min-quantum = 32
+   ```
+3. **Test Audio Input/Output:**
+   ```bash
+   # Test microphone
+   python -c "import sounddevice as sd; recording = sd.rec(3000, samplerate=44100, channels=1); sd.wait(); print('Audio test successful')"
+   ```
+
+**Alternative Solutions:**
+- **Switch to PulseAudio**: If PipeWire issues persist, consider switching to PulseAudio
+- **Use Specific Audio Device**: Try specifying a different audio device in your application
+- **Check Real-time Priority**: Ensure your user has proper real-time audio permissions
+
+**Audio Device Issues:**
+```bash
+# List available audio devices
+python -c "import sounddevice as sd; print(sd.query_devices())"
+
+# Check PipeWire status
+pactl info
+
+# Restart audio services if needed
+systemctl --user restart pipewire pipewire-pulse
+```
+
 ### Debug Mode
 ```python
 logging.basicConfig(level=logging.DEBUG)
@@ -345,6 +445,9 @@ python -c "from openai import OpenAI; print('OpenAI available')"
 
 # Test thread safety
 python -c "import asyncio; print('Event loop support available')"
+
+# Test PipeWire configuration (Linux)
+pw-metadata -n settings 0
 ```
 
 ## 🎨 Customization Examples
