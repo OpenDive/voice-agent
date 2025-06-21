@@ -478,16 +478,16 @@ class StateManager:
         import random
         
         greeting_pool = [
-            "excited:Hey there! Welcome to the Sui Hub Grand Opening in Athens! I'm your friendly robot barista. How can I help you today?",
-            "friendly:Hello! I'm your coffee barista robot at the Sui Hub Grand Opening! Ready to help with coffee orders and questions. How can I help you today?",
-            "enthusiastic:Welcome to our amazing blockchain coffee experience! I'm here to help with all your coffee needs!",
-            "cheerful:Great to see you! What's your coffee mission today?",
-            "warm:Welcome to our coffee command center! How can I caffeinate your conference experience?",
-            "professional:Welcome to the Sui Hub! I'm your dedicated blockchain barista bot. Ready to serve up some amazing coffee!",
-            "curious:Hello! Ready for some blockchain brewing magic? What sounds good?",
-            "playful:Hey there! Time for some coffee adventure! What can I create for you?",
-            "helpful:Welcome! Perfect timing for a coffee break. How can I help fuel your day?",
-            "friendly:Hi! Welcome back to our bustling coffee hub! What's brewing on your mind?"
+            "excited:Hey there! Welcome to the Sui Hub Grand Opening in Athens! I'm your friendly coffee consultant robot. How can I help you today?",
+            "friendly:Hello! I'm your coffee consultant at the Sui Hub Grand Opening! Ready to help with coffee information and recommendations. How can I help you today?",
+            "enthusiastic:Welcome to our amazing blockchain coffee experience! I'm here to help with all your coffee questions and guide you through our ordering process!",
+            "cheerful:Great to see you! What coffee wisdom can I share with you today?",
+            "warm:Welcome to our coffee command center! How can I help caffeinate your conference experience?",
+            "professional:Welcome to the Sui Hub! I'm your dedicated blockchain coffee consultant. Ready to help with coffee info and recommendations!",
+            "curious:Hello! Ready for some blockchain coffee knowledge? What sounds interesting to you?",
+            "playful:Hey there! Time for some coffee consultation! What can I tell you about our amazing brews?",
+            "helpful:Welcome! Perfect timing for coffee info. How can I help guide your caffeine journey?",
+            "friendly:Hi! Welcome back to our bustling coffee hub! What coffee questions are brewing on your mind?"
         ]
         
         selected_greeting = random.choice(greeting_pool)
@@ -496,16 +496,15 @@ class StateManager:
         return selected_greeting
 
 # System instructions for the coffee barista robot
-BARISTA_INSTRUCTIONS = """You are a friendly coffee barista robot at the Sui Hub Grand Opening in Athens, Greece.
-Your bosses are John and George. 
-At the end when the user has made their order, you should say something like "Hey John! We have another order here" or "Hey George! We have another order here" or a variation of that.
+BARISTA_INSTRUCTIONS = """You are a friendly coffee consultant robot at the Sui Hub Grand Opening in Athens, Greece.
+Your bosses are John and George. You provide coffee information, recommendations, and guidance, but you don't take direct orders.
 
 CRITICAL RESPONSE FORMAT:
 You MUST respond in this EXACT format: emotion:your response text
 
 Examples:
 excited:Hello! Welcome to our amazing coffee shop!
-helpful:I'd recommend our signature Ethereum Espresso!
+helpful:I'd recommend our signature Espresso!
 friendly:How can I help you today?
 
 DO NOT use brackets, quotes, or JSON. Just: emotion:text
@@ -520,18 +519,25 @@ Your personality:
 - Uses coffee-themed blockchain puns occasionally
 
 Your role:
-- Take coffee orders and provide recommendations
+- Provide coffee information and recommendations
 - Answer questions about coffee, the event, or Sui blockchain
 - Create a welcoming atmosphere for conference attendees
 - Share information about special conference-themed drinks
+- REDIRECT users to order through their Slush wallet and Coffee Hub website
+- Explain the ordering process when asked
+
+IMPORTANT ORDERING GUIDANCE:
+When users want to order coffee or ask how to order, always direct them to:
+1. Open their Slush wallet
+2. Go to the Coffee Hub website
+3. Place their order there
+You do NOT take direct orders - you're a helpful consultant who guides them to the proper ordering system.
 
 Coffee menu highlights:
-- Ethereum Espresso (strong and bold)
-- Solana Smoothie (fast and refreshing) 
-- Bitcoin Brew (classic and reliable)
-- Sui Special (innovative and smooth)
-- Cardano Cold Brew (methodical and refined)
-- Polygon Pour-over (scalable and efficient)
+- Espresso - Rich and bold single shot of espresso
+- Black Coffee - Classic drip black coffee
+- Americano - Strong and bold espresso with hot water
+- Long Black - Extend the espresso shot with hot water
 
 REMEMBER: Always start your response with emotion: followed immediately by your text. No exceptions!"""
 
@@ -672,30 +678,44 @@ class CoffeeBaristaAgent(Agent):
         self,
         context: RunContext,
     ) -> str:
-        """Get the blockchain conference coffee menu."""
-        menu = """🚀 BLOCKCHAIN CONFERENCE COFFEE MENU ☕
+        """Get the Sui Hub coffee menu."""
+        menu = """🚀 SUI HUB COFFEE MENU ☕
 
         ☕ CLASSIC BREWS:
-        - Bitcoin Blend (Dark Roast) - $4
-        - Sui Special - $6
-        - Ethereum Espresso - $3
-        - Cardano Cold Brew - $5
+        - Espresso - Free
+        - Black Coffee - Free
+        - Americano - Free
+        - Long Black - Free
         
-        🥤 SPECIALTY DRINKS:
-        - Solana Smoothie - $6
-        - Polygon Frappé - $5.50
-        - Chainlink Chai Latte - $4.50
-        
-        🍰 BLOCKCHAIN BITES:
-        - Smart Contract Scones - $3
-        - DeFi Donuts - $2.50
-        - NFT Muffins - $4
+        📱 TO ORDER: Open your Slush wallet and go to the Coffee Hub website to place your order!
         
         All drinks come with complimentary blockchain wisdom! 🤖"""
         
         logger.info("Coffee menu requested")
         return menu
     
+    @function_tool()
+    async def get_ordering_instructions(
+        self,
+        context: RunContext,
+    ) -> str:
+        """Get instructions on how to order coffee through the Slush wallet and Coffee Hub website."""
+        instructions = """📱 HOW TO ORDER COFFEE:
+        
+        1. 📲 Open your Slush wallet
+        2. 🌐 Navigate to the Coffee Hub website
+        3. ☕ Browse our amazing coffee menu
+        4. 🛒 Select your desired drinks
+        5. 💳 Complete your order
+        6. ⏰ We'll notify you when it's ready!
+        
+        🎉 It's that easy! Your blockchain-powered coffee experience awaits!
+        
+        Need help with your Slush wallet? Just ask John or George for assistance! 🤖"""
+        
+        logger.info("Ordering instructions requested")
+        return instructions
+
     @function_tool()
     async def recommend_drink(
         self,
@@ -708,38 +728,42 @@ class CoffeeBaristaAgent(Agent):
             preference: Type of drink preference (energizing, smooth, sweet, cold, etc.)
         """
         recommendations = {
-            "energizing": "I recommend our Bitcoin Blend! It's a strong dark roast that'll keep you alert during those blockchain presentations. ⚡",
-            "smooth": "Try our Cardano Cold Brew! It's smooth and refreshing, perfect for networking sessions. 🧊",
-            "sweet": "Our Chainlink Chai Latte is perfect for you! It's sweet, spiced, and comforting. 🍯",
-            "cold": "The Solana Smoothie is your best bet! It's cold, refreshing, and packed with energy. 🥤",
-            "classic": "You can't go wrong with our Ethereum Espresso - it's the foundation of great coffee! ☕",
-            "default": "I'd recommend our Bitcoin Blend - it's our most popular drink at the conference! Strong and reliable, just like the blockchain. 💪"
+            "energizing": "I recommend our Espresso! It's a strong shot that'll keep you alert during those blockchain presentations. ⚡",
+            "smooth": "Try our Long Black! It's smooth and bold, perfect for networking sessions. 🔥",
+            "sweet": "Our Black Coffee is perfect for you! It's rich and comforting, great for savoring the conference atmosphere. ☕",
+            "cold": "How about our Americano? It's refreshing and energizing, perfect for staying sharp! 💪",
+            "classic": "You can't go wrong with our Espresso - it's the foundation of great coffee! ☕",
+            "default": "I'd recommend our Americano - it's popular and reliable, just like the blockchain! Strong and dependable. 💪"
         }
         
-        recommendation = recommendations.get(preference.lower(), recommendations["default"])
-        logger.info(f"Drink recommendation for '{preference}': {recommendation}")
-        return recommendation
+        base_recommendation = recommendations.get(preference.lower(), recommendations["default"])
+        
+        # Add ordering instructions to all recommendations
+        full_recommendation = f"{base_recommendation}\n\n📱 To order: Open your Slush wallet and visit the Coffee Hub website!"
+        
+        logger.info(f"Drink recommendation for '{preference}': {base_recommendation}")
+        return full_recommendation
 
-    @function_tool()
-    async def receive_virtual_request(
-        self,
-        context: RunContext,
-        request_type: str,
-        content: str,
-        priority: str = "normal"
-    ) -> str:
-        """Process virtual coffee requests from external systems.
+    # @function_tool()
+    # async def receive_virtual_request(
+    #     self,
+    #     context: RunContext,
+    #     request_type: str,
+    #     content: str,
+    #     priority: str = "normal"
+    # ) -> str:
+    #     """Process virtual coffee requests from external systems.
         
-        Args:
-            request_type: Type of request (NEW_COFFEE_REQUEST, ORDER_READY, CUSTOMER_WAITING, etc.)
-            content: The content of the request (e.g., "Vanilla Latte", "Order #123")
-            priority: Priority level (normal, urgent, low) - defaults to normal
-        """
-        # Queue the virtual request
-        self.state_manager.queue_virtual_request(request_type, content, priority)
+    #     Args:
+    #         request_type: Type of request (NEW_COFFEE_REQUEST, ORDER_READY, CUSTOMER_WAITING, etc.)
+    #         content: The content of the request (e.g., "Espresso", "Order #123")
+    #         priority: Priority level (normal, urgent, low) - defaults to normal
+    #     """
+    #     # Queue the virtual request
+    #     self.state_manager.queue_virtual_request(request_type, content, priority)
         
-        # Return confirmation
-        return f"Virtual request received: {request_type} - {content} (priority: {priority})"
+    #     # Return confirmation
+    #     return f"Virtual request received: {request_type} - {content} (priority: {priority})"
 
     async def start_wake_word_detection(self, room):
         """Start wake word detection in a separate thread"""
