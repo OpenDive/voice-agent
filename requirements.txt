@@ -3,7 +3,10 @@ typeguard
 python-dotenv
 pvporcupine==3.0.5
 pvrecorder==1.2.7
+websockets
 livekit
-livekit-agents[openai,deepgram,silero,turn-detector]
+livekit-agents>=1.1.1
+livekit-plugins-openai
+livekit-plugins-silero
 livekit-plugins-noise-cancellation
 # cartesia

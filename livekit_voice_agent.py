@@ -9,6 +9,8 @@ from enum import Enum
 from dotenv import load_dotenv
 import pvporcupine
 from pvrecorder import PvRecorder
+import websockets
+import websockets.server
 
 from livekit import agents
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, function_tool, RunContext
@@ -25,6 +27,10 @@ load_dotenv()
 USER_RESPONSE_TIMEOUT = int(os.getenv("USER_RESPONSE_TIMEOUT", "15"))  # seconds
 FINAL_TIMEOUT = int(os.getenv("FINAL_TIMEOUT", "10"))  # seconds after prompt
 MAX_CONVERSATION_TIME = int(os.getenv("MAX_CONVERSATION_TIME", "300"))  # 5 minutes total
+
+# WebSocket server settings
+WEBSOCKET_HOST = os.getenv("WEBSOCKET_HOST", "localhost")
+WEBSOCKET_PORT = int(os.getenv("WEBSOCKET_PORT", "8080"))
 
 class AgentState(Enum):
     DORMANT = "dormant"           # Only wake word detection active
@@ -561,6 +567,11 @@ class CoffeeBaristaAgent(Agent):
         self.wake_word_paused = False
         self.event_loop = None
         
+        # WebSocket server setup
+        self.websocket_server = None
+        self.websocket_thread = None
+        self.websocket_active = False
+        
     async def tts_node(self, text, model_settings=None):
         """Override TTS node to process delimiter-based responses (emotion:text) with minimal buffering"""
         logger.info("🔍 DEBUG: tts_node called - processing delimiter-based text with minimal buffering")
@@ -889,6 +900,115 @@ class CoffeeBaristaAgent(Agent):
         
         logger.info("Wake word detection stopped")
 
+    def stop_websocket_server(self):
+        """Stop WebSocket server"""
+        self.websocket_active = False
+        
+        if self.websocket_thread and self.websocket_thread.is_alive():
+            self.websocket_thread.join(timeout=2.0)
+        
+        logger.info("WebSocket server stopped")
+
+    async def start_websocket_server(self):
+        """Start WebSocket server for receiving order notifications"""
+        try:
+            self.websocket_active = True
+            self.event_loop = asyncio.get_event_loop()
+            
+            # Start WebSocket server in separate thread
+            self.websocket_thread = threading.Thread(
+                target=self._websocket_server_loop,
+                daemon=True
+            )
+            self.websocket_thread.start()
+            
+            logger.info(f"WebSocket server started on {WEBSOCKET_HOST}:{WEBSOCKET_PORT} - listening for order notifications")
+            
+        except Exception as e:
+            logger.error(f"Failed to start WebSocket server: {e}")
+
+    def _websocket_server_loop(self):
+        """WebSocket server loop running in separate thread"""
+        try:
+            # Create new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            # Start WebSocket server
+            async def server_main():
+                async with websockets.server.serve(
+                    self._handle_websocket_message,
+                    WEBSOCKET_HOST,
+                    WEBSOCKET_PORT
+                ):
+                    logger.info(f"🌐 WebSocket server listening on ws://{WEBSOCKET_HOST}:{WEBSOCKET_PORT}")
+                    # Keep server running
+                    while self.websocket_active:
+                        await asyncio.sleep(1)
+            
+            loop.run_until_complete(server_main())
+            
+        except Exception as e:
+            logger.error(f"WebSocket server error: {e}")
+        finally:
+            loop.close()
+
+    async def _handle_websocket_message(self, websocket, path):
+        """Handle incoming WebSocket messages from indexer"""
+        client_info = f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
+        logger.info(f"🌐 WebSocket client connected: {client_info}")
+        
+        try:
+            async for message in websocket:
+                try:
+                    # Parse incoming message
+                    data = json.loads(message)
+                    logger.info(f"📨 Received WebSocket message: {data}")
+                    
+                    # Extract order information
+                    order_type = data.get("type", "NEW_COFFEE_REQUEST")
+                    order_id = data.get("order_id", "unknown")
+                    coffee_type = data.get("coffee_type", "coffee")
+                    priority = data.get("priority", "normal")
+                    
+                    # Format content for voice announcement
+                    content = f"{coffee_type} (Order: {order_id[:8]}...)"
+                    
+                    # Queue virtual request using thread-safe method
+                    # Since queue_virtual_request is synchronous, we can call it directly
+                    # but we need to ensure thread safety
+                    future = asyncio.run_coroutine_threadsafe(
+                        asyncio.create_task(asyncio.to_thread(
+                            self.state_manager.queue_virtual_request, 
+                            order_type, content, priority
+                        )),
+                        self.event_loop
+                    )
+                    
+                    logger.info(f"✅ Queued order notification: {coffee_type} for order {order_id}")
+                    
+                    # Send confirmation back to indexer
+                    response = {
+                        "status": "success",
+                        "message": f"Order notification received: {coffee_type}"
+                    }
+                    await websocket.send(json.dumps(response))
+                    
+                except json.JSONDecodeError as e:
+                    logger.error(f"❌ Invalid JSON in WebSocket message: {e}")
+                    error_response = {"status": "error", "message": "Invalid JSON format"}
+                    await websocket.send(json.dumps(error_response))
+                    
+                except Exception as e:
+                    logger.error(f"❌ Error processing WebSocket message: {e}")
+                    error_response = {"status": "error", "message": str(e)}
+                    await websocket.send(json.dumps(error_response))
+                    
+        except websockets.exceptions.ConnectionClosed:
+            logger.info(f"🌐 WebSocket client disconnected: {client_info}")
+        except Exception as e:
+            logger.error(f"❌ WebSocket connection error: {e}")
+
 async def entrypoint(ctx: JobContext):
     """Main entrypoint for the coffee barista agent"""
     
@@ -901,6 +1021,9 @@ async def entrypoint(ctx: JobContext):
     
     # Set context in state manager
     agent.state_manager.ctx = ctx
+    
+    # Start WebSocket server for order notifications
+    await agent.start_websocket_server()
     
     # Start wake word detection
     await agent.start_wake_word_detection(ctx.room)
@@ -938,6 +1061,7 @@ if __name__ == "__main__":
     # Log configuration
     logger.info("☕ Starting Coffee Barista Voice Agent...")
     logger.info(f"Wake Word Detection: {'✅ Enabled' if os.getenv('PORCUPINE_ACCESS_KEY') else '❌ Disabled (always-on mode)'}")
+    logger.info(f"WebSocket Server: ✅ Enabled on {WEBSOCKET_HOST}:{WEBSOCKET_PORT}")
     logger.info(f"OpenAI Model: gpt-4o-mini")
     logger.info(f"Voice: {os.getenv('VOICE_AGENT_VOICE', 'nova')}")
     logger.info(f"Temperature: {os.getenv('VOICE_AGENT_TEMPERATURE', '0.7')}")
