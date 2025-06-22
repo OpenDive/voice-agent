@@ -382,6 +382,12 @@ class StateManager:
             return f"excited:New order alert! We have a {content} request coming in!"
         elif request_type == "ORDER_READY":
             return f"professional:Order ready for pickup: {content}!"
+        elif request_type == "ORDER_PROCESSING":
+            return f"helpful:Order update: {content} is now being prepared!"
+        elif request_type == "ORDER_COMPLETED":
+            return f"cheerful:Great news! {content} has been completed and delivered!"
+        elif request_type == "ORDER_UPDATED":
+            return f"friendly:Order update: {content}"
         elif request_type == "CUSTOMER_WAITING":
             return f"helpful:Customer notification: {content}"
         else:
