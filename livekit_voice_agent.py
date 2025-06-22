@@ -975,14 +975,10 @@ class CoffeeBaristaAgent(Agent):
                     content = f"{coffee_type} (Order: {order_id[:8]}...)"
                     
                     # Queue virtual request using thread-safe method
-                    # Since queue_virtual_request is synchronous, we can call it directly
-                    # but we need to ensure thread safety
-                    future = asyncio.run_coroutine_threadsafe(
-                        asyncio.create_task(asyncio.to_thread(
-                            self.state_manager.queue_virtual_request, 
-                            order_type, content, priority
-                        )),
-                        self.event_loop
+                    # Use call_soon_threadsafe for simple synchronous function calls
+                    self.event_loop.call_soon_threadsafe(
+                        self.state_manager.queue_virtual_request,
+                        order_type, content, priority
                     )
                     
                     logger.info(f"✅ Queued order notification: {coffee_type} for order {order_id}")
