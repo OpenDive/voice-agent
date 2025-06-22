@@ -323,11 +323,11 @@ class StateManager:
             request = self.virtual_request_queue.pop(0)
             
             # Brief polite interruption
-            excuse_msg = "excuse:Oh, excuse me one moment..."
-            emotion, text = self.process_emotional_response(excuse_msg)
-            await self.say_with_emotion(text, emotion)
+            # excuse_msg = "excuse:Oh, excuse me one moment..."
+            # emotion, text = self.process_emotional_response(excuse_msg)
+            # await self.say_with_emotion(text, emotion)
             
-            await asyncio.sleep(1)
+            # await asyncio.sleep(5)
             
             # Announce the virtual request
             announcement = self._format_virtual_request_announcement(request)
@@ -336,10 +336,10 @@ class StateManager:
             
             await asyncio.sleep(1)
             
-            # Resume conversation
-            resume_msg = "friendly:Now, where were we?"
-            emotion, text = self.process_emotional_response(resume_msg)
-            await self.say_with_emotion(text, emotion)
+            # # Resume conversation
+            # resume_msg = "friendly:Now, where were we?"
+            # emotion, text = self.process_emotional_response(resume_msg)
+            # await self.say_with_emotion(text, emotion)
             
             logger.info(f"📢 Announced virtual request during conversation: {request['type']}")
             
