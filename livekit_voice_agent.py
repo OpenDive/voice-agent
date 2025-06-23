@@ -295,7 +295,7 @@ class StateManager:
         
         logger.info("🔍 DEBUG: end_conversation completed - now in dormant state")
 
-    def queue_virtual_request(self, request_type: str, content: str, priority: str = "normal"):
+    async def queue_virtual_request(self, request_type: str, content: str, priority: str = "normal"):
         """Add a virtual request to the queue"""
         request = {
             "type": request_type,
@@ -311,6 +311,11 @@ class StateManager:
             self.virtual_request_queue.append(request)
             
         logger.info(f"📋 Queued virtual request: {request_type} - {content} (priority: {priority})")
+        
+        # If agent is in DORMANT state, immediately process the request
+        if self.current_state == AgentState.DORMANT:
+            logger.info("🔍 Agent in DORMANT state - processing virtual request immediately")
+            await self._process_queued_virtual_requests()
 
     async def _process_virtual_request_during_conversation(self):
         """Process a virtual request during conversation pause"""
@@ -708,10 +713,10 @@ class CoffeeBaristaAgent(Agent):
         menu = """🚀 SUI HUB COFFEE MENU ☕
 
         ☕ CLASSIC BREWS:
-        - Espresso - Free
-        - Black Coffee - Free
-        - Americano - Free
-        - Long Black - Free
+        - Espresso
+        - Black Coffee
+        - Americano
+        - Long Black
         
         📱 TO ORDER: Open your Slush wallet and go to the Coffee Hub website to place your order!
         
@@ -990,10 +995,10 @@ class CoffeeBaristaAgent(Agent):
                     content = f"{coffee_type} (Order: {order_id[:8]}...)"
                     
                     # Queue virtual request using thread-safe method
-                    # Use call_soon_threadsafe for simple synchronous function calls
-                    self.event_loop.call_soon_threadsafe(
-                        self.state_manager.queue_virtual_request,
-                        order_type, content, priority
+                    # Use run_coroutine_threadsafe for async function calls
+                    asyncio.run_coroutine_threadsafe(
+                        self.state_manager.queue_virtual_request(order_type, content, priority),
+                        self.event_loop
                     )
                     
                     logger.info(f"✅ Queued order notification: {coffee_type} for order {order_id}")
