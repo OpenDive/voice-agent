@@ -55,6 +55,11 @@ class StateManager:
         self.announcing_virtual_request = False  # Flag to prevent conflicts during announcements
         self.recent_greetings = []  # Track recent greetings to avoid repetition
         self.interaction_count = 0  # Track number of interactions for familiarity
+        
+        # Phase 4: Mutual exclusion for virtual request processing
+        self.virtual_request_processing_lock = asyncio.Lock()
+        self.batch_timer = None  # Timer for batching rapid requests
+        self.batch_window_duration = 2.0  # seconds to collect requests into a batch
 
     async def transition_to_state(self, new_state: AgentState):
         """Handle state transitions with proper cleanup"""
@@ -79,6 +84,12 @@ class StateManager:
                 self.user_response_timer = None
             # Reset conversation ending flag
             self.ending_conversation = False
+        
+        # Cancel batch timer if transitioning away from DORMANT
+        if self.current_state == AgentState.DORMANT and self.batch_timer:
+            self.batch_timer.cancel()
+            self.batch_timer = None
+            logger.info("🔍 Cancelled batch collection timer during state transition")
 
     async def _enter_new_state(self):
         """Initialize new state"""
@@ -296,7 +307,7 @@ class StateManager:
         logger.info("🔍 DEBUG: end_conversation completed - now in dormant state")
 
     async def queue_virtual_request(self, request_type: str, content: str, priority: str = "normal"):
-        """Add a virtual request to the queue"""
+        """Add a virtual request to the queue with batching support"""
         request = {
             "type": request_type,
             "content": content,
@@ -310,12 +321,105 @@ class StateManager:
         else:
             self.virtual_request_queue.append(request)
             
-        logger.info(f"📋 Queued virtual request: {request_type} - {content} (priority: {priority})")
+        logger.info(f"📋 Queued virtual request: {request_type} - {content} (priority: {priority}) [Queue size: {len(self.virtual_request_queue)}]")
         
-        # If agent is in DORMANT state, immediately process the request
+        # If agent is in DORMANT state, trigger batch processing
         if self.current_state == AgentState.DORMANT:
-            logger.info("🔍 Agent in DORMANT state - processing virtual request immediately")
-            await self._process_queued_virtual_requests()
+            await self._trigger_batch_processing()
+        else:
+            logger.info(f"🔍 Agent in {self.current_state.value} state - request will be processed during conversation")
+
+    async def _trigger_batch_processing(self):
+        """Trigger batch processing with mutual exclusion and batching logic"""
+        # Check if we're already processing (mutual exclusion)
+        if self.virtual_request_processing_lock.locked():
+            logger.info("🔍 Virtual request processing already in progress - request will be included in current/next batch")
+            return
+        
+        # Check if there are urgent requests - process immediately
+        has_urgent = any(req.get("priority") == "urgent" for req in self.virtual_request_queue)
+        
+        if has_urgent:
+            logger.info("🔍 Urgent request detected - processing batch immediately")
+            # Cancel existing batch timer if running
+            if self.batch_timer:
+                self.batch_timer.cancel()
+                self.batch_timer = None
+            # Process immediately
+            await self._process_batch_with_lock()
+        else:
+            # If no batch timer is running, start one for normal priority requests
+            if self.batch_timer is None:
+                logger.info("🔍 Starting batch collection timer for normal priority requests")
+                self.batch_timer = asyncio.create_task(self._batch_collection_timer())
+
+    async def _batch_collection_timer(self):
+        """Collect requests for a time window, then process them as a batch"""
+        try:
+            # Wait for batch collection window
+            await asyncio.sleep(self.batch_window_duration)
+            
+            # Process collected batch
+            await self._process_batch_with_lock()
+            
+        except asyncio.CancelledError:
+            logger.info("🔍 Batch collection timer cancelled")
+        finally:
+            self.batch_timer = None
+
+    async def _process_batch_with_lock(self):
+        """Process all queued virtual requests as a single batch with mutual exclusion"""
+        async with self.virtual_request_processing_lock:
+            if not self.virtual_request_queue:
+                logger.info("🔍 No virtual requests to process in batch")
+                return
+            
+            if self.current_state != AgentState.DORMANT:
+                logger.info("🔍 Agent no longer in DORMANT state - skipping batch processing")
+                return
+            
+            logger.info(f"🔍 Processing batch of {len(self.virtual_request_queue)} virtual requests")
+            
+            # Create single session for entire batch
+            temp_session = None
+            try:
+                if not self.session:
+                    temp_session = await self.create_session(self.agent)
+                    logger.info("🔍 Created temporary session for batch processing")
+                
+                # Process all requests in the batch
+                batch_size = len(self.virtual_request_queue)
+                for i, request in enumerate(self.virtual_request_queue.copy()):
+                    try:
+                        # Remove request from queue
+                        self.virtual_request_queue.remove(request)
+                        
+                        # Announce the virtual request
+                        announcement = self._format_virtual_request_announcement(request)
+                        emotion, text = self.process_emotional_response(announcement)
+                        await self.say_with_emotion(text, emotion)
+                        
+                        logger.info(f"📢 Announced batch request {i+1}/{batch_size}: {request['type']}")
+                        
+                        # Small delay between announcements in the same batch
+                        if i < batch_size - 1:
+                            await asyncio.sleep(1.0)
+                        
+                    except Exception as e:
+                        logger.error(f"Error processing batch request {request['type']}: {e}")
+                
+                # Final pause before cleaning up session
+                await asyncio.sleep(1.0)
+                
+            except Exception as e:
+                logger.error(f"Error in batch processing: {e}")
+            finally:
+                # Clean up temporary session
+                if temp_session and self.session:
+                    await self.destroy_session()
+                    logger.info("🔍 Cleaned up temporary batch processing session")
+                
+                logger.info(f"🔍 Batch processing completed - {len(self.virtual_request_queue)} requests remaining in queue")
 
     async def _process_virtual_request_during_conversation(self):
         """Process a virtual request during conversation pause"""
@@ -354,29 +458,9 @@ class StateManager:
             self.announcing_virtual_request = False
 
     async def _process_queued_virtual_requests(self):
-        """Process all queued virtual requests when in dormant state"""
-        while self.virtual_request_queue and self.current_state == AgentState.DORMANT:
-            try:
-                request = self.virtual_request_queue.pop(0)
-                
-                # Create temporary session for announcement
-                if not self.session:
-                    temp_session = await self.create_session(self.agent)
-                
-                # Announce the virtual request
-                announcement = self._format_virtual_request_announcement(request)
-                emotion, text = self.process_emotional_response(announcement)
-                await self.say_with_emotion(text, emotion)
-                
-                await asyncio.sleep(2)
-                
-                # Clean up temporary session
-                await self.destroy_session()
-                
-                logger.info(f"📢 Announced queued virtual request: {request['type']}")
-                
-            except Exception as e:
-                logger.error(f"Error processing queued virtual request: {e}")
+        """Legacy method - now delegates to new batch processing system"""
+        logger.info("🔍 Legacy _process_queued_virtual_requests called - delegating to batch processing")
+        await self._process_batch_with_lock()
 
     def _format_virtual_request_announcement(self, request: dict) -> str:
         """Format virtual request as emotional announcement"""
