@@ -387,22 +387,25 @@ class StateManager:
                     temp_session = await self.create_session(self.agent)
                     logger.info("🔍 Created temporary session for batch processing")
                 
-                # Process all requests in the batch
+                # Process all requests in the batch (back to front for stable indices)
                 batch_size = len(self.virtual_request_queue)
-                for i, request in enumerate(self.virtual_request_queue.copy()):
+                for i in range(batch_size - 1, -1, -1):
                     try:
-                        # Remove request from queue
-                        self.virtual_request_queue.remove(request)
+                        # Get request and remove by index (avoids race condition)
+                        request = self.virtual_request_queue[i]
+                        del self.virtual_request_queue[i]
                         
                         # Announce the virtual request
                         announcement = self._format_virtual_request_announcement(request)
+                        logger.info(f"🔍 DEBUG: BATCH - Raw announcement: '{announcement}'")
                         emotion, text = self.process_emotional_response(announcement)
+                        logger.info(f"🔍 DEBUG: BATCH - Processed emotion: '{emotion}', text: '{text}'")
                         await self.say_with_emotion(text, emotion)
                         
-                        logger.info(f"📢 Announced batch request {i+1}/{batch_size}: {request['type']}")
+                        logger.info(f"📢 Announced batch request {batch_size-i}/{batch_size}: {request['type']}")
                         
                         # Small delay between announcements in the same batch
-                        if i < batch_size - 1:
+                        if i > 0:
                             await asyncio.sleep(1.0)
                         
                     except Exception as e:
@@ -678,7 +681,27 @@ class CoffeeBaristaAgent(Agent):
         
     async def tts_node(self, text, model_settings=None):
         """Override TTS node to process delimiter-based responses (emotion:text) with minimal buffering"""
-        logger.info("🔍 DEBUG: tts_node called - processing delimiter-based text with minimal buffering")
+        
+        # Identify the call source for debugging
+        # import inspect
+        # frame = inspect.currentframe()
+        # caller_info = "unknown"
+        # try:
+        #     caller_frame = frame.f_back.f_back  # Go up 2 frames to skip session.say()
+        #     if caller_frame:
+        #         caller_name = caller_frame.f_code.co_name
+        #         if "say_with_emotion" in caller_name:
+        #             caller_info = "VIRTUAL_REQUEST (say_with_emotion)"
+        #         elif "llm" in caller_name.lower() or "conversation" in caller_name.lower():
+        #             caller_info = "NORMAL_CONVERSATION (LLM)"
+        #         else:
+        #             caller_info = f"OTHER ({caller_name})"
+        # except:
+        #     pass
+        # finally:
+        #     del frame
+            
+        # logger.info(f"🔍 DEBUG: tts_node called from {caller_info} - processing delimiter-based text with minimal buffering")
         
         # Process text stream with minimal buffering for emotion extraction
         async def process_text_stream():
@@ -690,24 +713,30 @@ class CoffeeBaristaAgent(Agent):
             async for text_chunk in text:
                 if not text_chunk:
                     continue
-                
+
                 chunks_processed += 1
+                # logger.info(f"🔍 DEBUG: TTS chunk {chunks_processed}: '{text_chunk}' (len={len(text_chunk)})")
                 
                 # Only buffer and check for emotion in the very first chunk(s)
                 if not emotion_extracted and len(first_chunk_buffer) < emotion_check_limit:
                     first_chunk_buffer += text_chunk
+                    # logger.info(f"🔍 DEBUG: Buffer now: '{first_chunk_buffer}' (len={len(first_chunk_buffer)})")
                     
                     # Check if we have delimiter in the buffered portion
                     if ":" in first_chunk_buffer:
                         logger.info("🔍 DEBUG: Found delimiter in first chunk(s)! Extracting emotion...")
+                        logger.info(f"🔍 DEBUG: Full buffer for splitting: '{first_chunk_buffer}'")
                         
                         # Split on first colon
                         parts = first_chunk_buffer.split(":", 1)
                         emotion = parts[0].strip()
                         text_after_delimiter = parts[1] if len(parts) > 1 else ""
                         
-                        logger.info(f"🔍 DEBUG: Extracted emotion: '{emotion}'")
-                        logger.info(f"🔍 DEBUG: Text after delimiter: '{text_after_delimiter[:30]}{'...' if len(text_after_delimiter) > 30 else ''}'")
+                        # logger.info(f"🔍 DEBUG: Split result - parts count: {len(parts)}")
+                        # logger.info(f"🔍 DEBUG: parts[0] (emotion): '{emotion}'")
+                        # if len(parts) > 1:
+                        #     logger.info(f"🔍 DEBUG: parts[1] (raw text): '{parts[1]}'")
+                        # logger.info(f"🔍 DEBUG: Text after delimiter: '{text_after_delimiter[:30]}{'...' if len(text_after_delimiter) > 30 else ''}'")
                         
                         # Validate and process the emotion
                         valid_emotions = {
@@ -733,6 +762,8 @@ class CoffeeBaristaAgent(Agent):
                         if text_after_delimiter.strip():
                             logger.info(f"💬 TTS streaming text immediately: {text_after_delimiter[:30]}{'...' if len(text_after_delimiter) > 30 else ''}")
                             yield text_after_delimiter
+                        else:
+                            logger.warning("🔍 DEBUG: text_after_delimiter is empty or whitespace - nothing to yield!")
                         
                     elif len(first_chunk_buffer) >= emotion_check_limit:
                         # Reached limit without finding delimiter - give up and stream everything
